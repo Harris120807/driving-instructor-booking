@@ -12,5 +12,4 @@ directory = "public"
 [[d1_databases]]
 binding = "DB"
 database_name = "driving-booking"
-# Filled in after `npx wrangler d1 create driving-booking`
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "d6afe460-f234-4c9f-b168-a2ecfa18962a"
