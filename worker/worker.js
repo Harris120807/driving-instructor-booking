@@ -22,7 +22,7 @@ const DEFAULT_CONFIG = {
   area: 'Your town and surrounding areas',
   phone: '',
   email: '',
-  prices: { 60: 44, 90: 66, 120: 88 }, // £ per lesson length (minutes)
+  hourly_rate: 44,         // £ per hour; lesson price = rate × length
   notice_hours: 12,        // minimum notice to BOOK a slot
   cancel_notice_hours: 24, // cancelling closer than this to the lesson incurs the fee
   late_cancel_fee: 44,     // £ owed for a late cancellation
@@ -40,9 +40,17 @@ const DEFAULT_TEMPLATE = {
 };
 
 const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-const DURATIONS = [60, 90, 120];
+const DURATIONS = [60, 90, 120, 150, 180, 210, 240]; // 1–4 h, 30-min steps
 const SLOT_STEP_MIN = 30;   // start-time grid
 const MAX_REPEAT_WEEKS = 12;
+
+// Lesson price scales with length from the single hourly rate
+// (old configs stored a prices map — its 1-hour entry doubles as the rate)
+function lessonPrice(config, durationMin) {
+  const rate = Number.isFinite(config.hourly_rate) ? config.hourly_rate
+    : (config.prices?.[60] ?? 44);
+  return Math.round(rate * durationMin / 60 * 100) / 100;
+}
 
 function json(data, status = 200, extra = {}) {
   return new Response(JSON.stringify(data), {
@@ -316,7 +324,9 @@ export default {
         const c = await getSetting(env, 'config', DEFAULT_CONFIG);
         return json({
           name: c.name, area: c.area, phone: c.phone, email: c.email,
-          prices: c.prices, notice_hours: c.notice_hours,
+          hourly_rate: lessonPrice(c, 60),
+          prices: Object.fromEntries(DURATIONS.map(d => [d, lessonPrice(c, d)])),
+          notice_hours: c.notice_hours,
           cancel_notice_hours: c.cancel_notice_hours, late_cancel_fee: c.late_cancel_fee,
           horizon_days: c.horizon_days, durations: DURATIONS, max_repeat_weeks: MAX_REPEAT_WEEKS,
         }, 200, { 'Cache-Control': 'public, max-age=300' });
@@ -375,7 +385,7 @@ export default {
           return json({ error: 'That slot is no longer available — please pick another.' }, 409);
 
         const config = await getSetting(env, 'config', DEFAULT_CONFIG);
-        const price = config.prices[duration];
+        const price = lessonPrice(config, duration);
         const name = bkName, email = bkEmail.toLowerCase();
         const phone = bkPhone, postcode = String(b.postcode).trim().toUpperCase();
         const series = repeatWeeks > 1 ? newRef() : null;
@@ -720,13 +730,12 @@ export default {
             area: String(c.area || '').slice(0, 200),
             phone: String(c.phone || '').slice(0, 30),
             email: RE_EMAIL.test(c.email || '') ? c.email : '',
-            prices: {},
+            hourly_rate: num(c.hourly_rate, 0, 1000, DEFAULT_CONFIG.hourly_rate),
             notice_hours: num(c.notice_hours, 0, 72, DEFAULT_CONFIG.notice_hours),
             cancel_notice_hours: num(c.cancel_notice_hours, 0, 168, DEFAULT_CONFIG.cancel_notice_hours),
             late_cancel_fee: num(c.late_cancel_fee, 0, 500, DEFAULT_CONFIG.late_cancel_fee),
             horizon_days: Math.round(num(c.horizon_days, 1, 90, DEFAULT_CONFIG.horizon_days)),
           };
-          for (const d of DURATIONS) clean.prices[d] = num(c.prices?.[d], 0, 1000, DEFAULT_CONFIG.prices[d]);
           await putSetting(env, 'config', clean);
           return json({ ok: true });
         }

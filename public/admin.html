@@ -100,7 +100,12 @@
   .calday.today { border: 2px solid var(--accent); }
   .calday .dn { font-weight: 700; margin-bottom: 2px; }
   .calchip { display: block; border-radius: 5px; padding: 1px 4px; margin-bottom: 2px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+    border: 1px solid transparent; }
+  .calchip:hover { border-color: currentColor; }
+  .cdgrid { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 10px 0; }
+  .cdgrid dt { color: var(--muted); font-size: .82rem; }
+  .cdgrid dd { margin: 0; }
   .calchip.confirmed { background: var(--accent-soft); color: var(--good); }
   .calchip.pending { background: rgba(176,125,16,.15); color: var(--warn); }
   .calchip.cancelled { background: rgba(194,59,59,.12); color: var(--bad); text-decoration: line-through; }
@@ -163,8 +168,17 @@
           <div class="calgrid" id="calHead"></div>
           <div class="calgrid" id="calBody" style="margin-top:4px"></div>
         </div>
-        <p class="muted" style="margin-top:10px">Green = confirmed, amber = pending, struck-through = cancelled, ↻ = weekly lesson, red-tinted day = time off. Hover a lesson for full details.</p>
+        <p class="muted" style="margin-top:10px">Green = confirmed, amber = pending, struck-through = cancelled, ↻ = weekly lesson, red-tinted day = time off. Click a lesson for details.</p>
         <div class="msg" id="calMsg"></div>
+      </div>
+      <div class="card" id="calDetail" style="display:none">
+        <div class="topbar">
+          <h2 id="cdTitle" style="margin:0"></h2>
+          <button class="btn ghost sm" id="cdClose">Close</button>
+        </div>
+        <dl class="cdgrid" id="cdBody"></dl>
+        <div id="cdActions"></div>
+        <div class="msg" id="cdMsg"></div>
       </div>
     </div>
 
@@ -250,11 +264,11 @@
         <div class="field"><label for="sArea">Area covered (shown on the site)</label><input id="sArea" maxlength="200"></div>
         <div class="field"><label for="sPhone">Phone</label><input id="sPhone" maxlength="30"></div>
         <div class="field"><label for="sEmail">Email</label><input id="sEmail" type="email" maxlength="200"></div>
-        <h2 style="margin-top:18px">Lesson prices (£, manual)</h2>
-        <div class="prices3">
-          <div class="field"><label for="p60">1 hour</label><input id="p60" type="number" min="0" step="0.5"></div>
-          <div class="field"><label for="p90">1½ hours</label><input id="p90" type="number" min="0" step="0.5"></div>
-          <div class="field"><label for="p120">2 hours</label><input id="p120" type="number" min="0" step="0.5"></div>
+        <h2 style="margin-top:18px">Pricing</h2>
+        <div class="field">
+          <label for="sRate">Hourly rate (£)</label>
+          <input id="sRate" type="number" min="0" step="0.5">
+          <div class="hint">Pupils pick any length from 1 to 4 hours (30-min steps); the price scales with this rate — e.g. £44/h makes a 1½-hour lesson £66.</div>
         </div>
         <h2 style="margin-top:18px">Booking rules</h2>
         <div class="field">
@@ -751,12 +765,73 @@ async function loadCalendar() {
       const c = document.createElement('span');
       c.className = 'calchip ' + b.status;
       c.textContent = `${b.time} ${b.name.split(' ')[0]}${b.series ? ' ↻' : ''}`;
-      c.title = `${b.time} · ${b.duration_min} min · ${b.name} (${(b.house ? b.house + ' ' : '') + b.postcode})` +
-        `${b.series ? ' · weekly' : ''} · ${b.status}${b.notes ? `\n${b.notes}` : ''}`;
+      c.title = 'Click for details';
+      c.onclick = () => showCalDetail(b);
       cell.appendChild(c);
     }
     body.appendChild(cell);
   }
+}
+
+$('cdClose').onclick = () => { $('calDetail').style.display = 'none'; };
+
+function showCalDetail(b) {
+  const el = $('calDetail');
+  el.style.display = 'block';
+  $('cdTitle').textContent = `${fmtWhen(b.date)} ${b.time} — ${b.name}`;
+  const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
+  $('cdBody').innerHTML =
+    row('Lesson', `${b.duration_min} min · ${fmtMoney(b.price)}${b.series ? ' · <span class="wk">↻ weekly</span>' : ''}`) +
+    row('Status', `<span class="st ${b.status}">${b.status}${b.cancelled_by === 'instructor' ? ' (you)' : ''}</span>` +
+      (b.fee > 0 ? ` <span class="owed">fee ${fmtMoney(b.fee)}${b.paid ? ' paid' : ' owed'}</span>` : '')) +
+    row('Pickup', esc((b.house ? b.house + ' ' : '') + b.postcode)) +
+    row('Phone', `<a href="tel:${esc(b.phone)}" style="color:inherit">${esc(b.phone)}</a>`) +
+    row('Email', esc(b.email)) +
+    (b.notes ? row('Notes', esc(b.notes)) : '') +
+    row('Ref', b.ref);
+  const acts = $('cdActions'); acts.innerHTML = '';
+  const after = () => { loadCalendar(); loadBookings(); loadStudents(); showCalDetail(b); };
+  if (b.status === 'pending') {
+    const btn = document.createElement('button');
+    btn.className = 'btn sm'; btn.style.margin = '2px'; btn.textContent = 'Confirm';
+    btn.onclick = async () => {
+      try {
+        if (!DEMO) await api('/admin/booking', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: b.id, action: 'confirmed' }),
+        });
+        b.status = 'confirmed';
+        ok($('cdMsg'), 'Confirmed. Remember to tell the pupil.');
+        after();
+      } catch (e) { err($('cdMsg'), e.message); }
+    };
+    acts.appendChild(btn);
+  }
+  if (b.status !== 'cancelled') {
+    const btn = document.createElement('button');
+    btn.className = 'btn sm danger'; btn.style.margin = '2px'; btn.textContent = 'Cancel lesson';
+    btn.onclick = async () => {
+      if (!confirm(`Cancel ${b.name}'s lesson on ${b.date} ${b.time}? (No fee for the pupil.)`)) return;
+      try {
+        if (!DEMO) await api('/admin/booking', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: b.id, action: 'cancelled' }),
+        });
+        b.status = 'cancelled'; b.cancelled_by = 'instructor';
+        ok($('cdMsg'), 'Cancelled. Remember to tell the pupil.');
+        after();
+      } catch (e) { err($('cdMsg'), e.message); }
+    };
+    acts.appendChild(btn);
+  }
+  const acct = document.createElement('button');
+  acct.className = 'btn ghost sm'; acct.style.margin = '2px'; acct.textContent = 'View pupil account';
+  acct.onclick = () => {
+    document.querySelector('.tab[data-pane="students"]').click();
+    loadStudent({ email: b.email, name: b.name });
+  };
+  acts.appendChild(acct);
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // --- schedule ---
@@ -866,7 +941,7 @@ $('addOv').onclick = async () => {
 // --- settings ---
 async function loadSettings() {
   let c = { name: 'Your Driving School', area: '', phone: '', email: '',
-    prices: { 60: 44, 90: 66, 120: 88 }, notice_hours: 12,
+    hourly_rate: 44, notice_hours: 12,
     cancel_notice_hours: 24, late_cancel_fee: 44, horizon_days: 21 };
   if (!DEMO) {
     try { c = (await api('/admin/settings')).config; }
@@ -874,7 +949,7 @@ async function loadSettings() {
   }
   $('sName').value = c.name; $('sArea').value = c.area;
   $('sPhone').value = c.phone; $('sEmail').value = c.email;
-  $('p60').value = c.prices[60]; $('p90').value = c.prices[90]; $('p120').value = c.prices[120];
+  $('sRate').value = c.hourly_rate ?? c.prices?.[60] ?? 44;
   $('sNotice').value = c.notice_hours; $('sCancelNotice').value = c.cancel_notice_hours;
   $('sFee').value = c.late_cancel_fee; $('sHorizon').value = c.horizon_days;
   $('consTitle').textContent = c.name + ' — console';
@@ -884,7 +959,7 @@ $('saveSettings').onclick = async () => {
   const config = {
     name: $('sName').value.trim(), area: $('sArea').value.trim(),
     phone: $('sPhone').value.trim(), email: $('sEmail').value.trim(),
-    prices: { 60: parseFloat($('p60').value), 90: parseFloat($('p90').value), 120: parseFloat($('p120').value) },
+    hourly_rate: parseFloat($('sRate').value),
     notice_hours: parseFloat($('sNotice').value),
     cancel_notice_hours: parseFloat($('sCancelNotice').value),
     late_cancel_fee: parseFloat($('sFee').value),

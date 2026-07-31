@@ -139,8 +139,11 @@
   </header>
 
   <div class="card">
-    <h2>1 · Choose your lesson</h2>
-    <div class="prices" id="prices"></div>
+    <h2>1 · Choose your lesson length</h2>
+    <input type="range" id="lenSlider" min="60" max="240" step="30" value="60"
+      style="width:100%; accent-color: var(--accent)" aria-label="Lesson length">
+    <div style="display:flex; justify-content:space-between" class="muted"><span>1 hour</span><span>4 hours</span></div>
+    <div style="margin-top:8px; font-size:1.15rem"><b id="lenLabel">1 hour</b> · <b id="lenPrice">£44</b> <span class="muted">— manual lesson</span></div>
   </div>
 
   <div class="card">
@@ -240,13 +243,16 @@ let DEMO = false;
 
 let CONFIG = {
   name: 'Driving Lessons', area: 'Local manual lessons with door-to-door pickup',
-  phone: '', email: '', prices: { 60: 44, 90: 66, 120: 88 },
+  phone: '', email: '', hourly_rate: 44, prices: {},
   notice_hours: 12, cancel_notice_hours: 24, late_cancel_fee: 44,
-  horizon_days: 21, durations: [60, 90, 120],
+  horizon_days: 21, durations: [60, 90, 120, 150, 180, 210, 240],
 };
 const state = { duration: 60, date: null, time: null, slots: {}, portal: null, portalAuth: null };
 
-const fmtLen = m => m === 60 ? '1 hour' : m === 90 ? '1½ hours' : (m / 60) + ' hours';
+const fmtLen = m => {
+  const h = Math.floor(m / 60), half = m % 60 === 30;
+  return (half ? h + '½' : h) + ' hour' + (h === 1 && !half ? '' : 's');
+};
 const fmtMoney = v => '£' + (Number.isInteger(v) ? v : v.toFixed(2));
 
 async function api(path, opts) {
@@ -292,20 +298,28 @@ async function loadConfig() {
   $('fContact').textContent = [CONFIG.phone, CONFIG.email].filter(Boolean).join(' · ');
   $('horizonNote').textContent =
     `Bookings open up to ${CONFIG.horizon_days} days ahead (minimum ${CONFIG.notice_hours}h notice to book). All times UK.`;
-  renderPrices();
+  // Fill any price gaps from the hourly rate (server sends the full map; demo doesn't)
+  for (const d of CONFIG.durations)
+    CONFIG.prices[d] = CONFIG.prices[d] ?? Math.round(CONFIG.hourly_rate * d / 60 * 100) / 100;
+  renderLen();
 }
 
-function renderPrices() {
-  $('prices').innerHTML = '';
-  for (const d of CONFIG.durations) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'price' + (state.duration === d ? ' sel' : '');
-    b.innerHTML = `<span class="amt">${fmtMoney(CONFIG.prices[d])}</span><span class="len">${fmtLen(d)} · manual</span>`;
-    b.onclick = () => { state.duration = d; state.time = null; renderPrices(); loadSlots(); };
-    $('prices').appendChild(b);
-  }
+function renderLen() {
+  $('lenLabel').textContent = fmtLen(state.duration);
+  $('lenPrice').textContent = fmtMoney(CONFIG.prices[state.duration]);
 }
+
+$('lenSlider').addEventListener('input', () => {
+  const v = parseInt($('lenSlider').value, 10);
+  $('lenLabel').textContent = fmtLen(v);
+  $('lenPrice').textContent = fmtMoney(CONFIG.prices[v] ?? CONFIG.hourly_rate * v / 60);
+});
+$('lenSlider').addEventListener('change', () => {
+  state.duration = parseInt($('lenSlider').value, 10);
+  state.time = null;
+  renderLen();
+  loadSlots();
+});
 
 async function loadSlots() {
   const today = new Date().toISOString().slice(0, 10);
