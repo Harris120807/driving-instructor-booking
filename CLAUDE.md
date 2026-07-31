@@ -36,3 +36,22 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
   (see session history) — exercise slots/booking/cancel-fee/override paths.
 - Secrets: `ADMIN_KEY`, optional `NTFY_TOPIC` (instructor's own topic).
   D1 id lives in wrangler.toml (not secret).
+- **LIVE since 2026-07-31** at https://driving-booking.harris-stockdash.workers.dev
+  (workers.dev subdomain is account-wide, hence the stockdash-flavored host —
+  a custom domain replaces it once the owner buys one). D1 `driving-booking`
+  id d6afe460-f234-4c9f-b168-a2ecfa18962a. Schema migrations = re-run
+  schema.sql (CREATE TABLE IF NOT EXISTS only; never destructive on prod).
+  Deploys via wrangler with an owner-pasted scoped token (Workers+D1 edit).
+- **Pupil accounts (2026-07-31)**: email+password, PBKDF2-100k, hashed 90d
+  bearer sessions (localStorage `dl-session`). NO email service by design —
+  signup AND password reset require a booking ref belonging to the email as
+  identity proof. Never add an email-verification dependency without owner
+  sign-off, and never serve `students.notes` (instructor-private) or any
+  admin payload to pupil routes.
+- **Credit/passed/notes** live in D1 `students` keyed by lowercased email;
+  displayed owed = gross − credit, floor 0; `/admin/pay-from-credit` is the
+  atomic settle path. "Passed" only filters the default list — data is kept.
+- **Admin UI conventions**: weekly series collapse to one ↻ line in Bookings
+  (expand for per-week actions; confirm-all/cancel-all loop client-side over
+  `/admin/booking`); Calendar tab reloads on every tab click via
+  `/admin/calendar?from&to` (≤62 days, returns bookings + blocked dates).

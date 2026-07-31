@@ -60,6 +60,34 @@ async function sha256Hex(s) {
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+const bytesToHex = a => [...a].map(b => b.toString(16).padStart(2, '0')).join('');
+const randomHex = n => bytesToHex(crypto.getRandomValues(new Uint8Array(n)));
+
+async function pbkdf2Hex(password, saltHex) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const salt = new Uint8Array(saltHex.match(/../g).map(h => parseInt(h, 16)));
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 100000 }, key, 256);
+  return bytesToHex(new Uint8Array(bits));
+}
+
+// Pupil session from the Authorization bearer token; null if absent/expired
+async function sessionEmail(req, env) {
+  const tok = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+  if (!/^[0-9a-f]{64}$/.test(tok)) return null;
+  const row = await env.DB.prepare('SELECT email, expires FROM sessions WHERE token_hash = ?')
+    .bind(await sha256Hex(tok)).first();
+  if (!row || row.expires < Math.floor(Date.now() / 1000)) return null;
+  return row.email;
+}
+
+async function newSession(env, email) {
+  const token = randomHex(32);
+  await env.DB.prepare('INSERT INTO sessions (token_hash, email, expires) VALUES (?, ?, ?)')
+    .bind(await sha256Hex(token), email, Math.floor(Date.now() / 1000) + 90 * 86400).run();
+  return token;
+}
+
 async function isAdmin(req, env) {
   const auth = req.headers.get('Authorization') || '';
   const key = auth.replace(/^Bearer\s+/i, '');
@@ -217,6 +245,39 @@ function upcomingCostOf(now, b) {
   return (b.status !== 'cancelled' && !lessonPast(now, b)) ? b.price : 0;
 }
 
+async function studentMeta(env, email) {
+  return (await env.DB.prepare('SELECT * FROM students WHERE email = ?').bind(email).first())
+    || { email, notes: '', passed: 0, credit: 0 };
+}
+
+async function putStudentMeta(env, m) {
+  await env.DB.prepare(
+    `INSERT INTO students (email, notes, passed, credit, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(email) DO UPDATE SET notes = excluded.notes, passed = excluded.passed,
+       credit = excluded.credit, updated_at = excluded.updated_at`
+  ).bind(m.email, m.notes || '', m.passed ? 1 : 0, m.credit || 0, Math.floor(Date.now() / 1000)).run();
+}
+
+// Full account picture for one pupil (shared by /me/lessons and the console)
+async function accountFor(env, email) {
+  const rows = (await env.DB.prepare(
+    'SELECT * FROM bookings WHERE email = ? ORDER BY date, time').bind(email).all()).results;
+  const meta = await studentMeta(env, email);
+  const now = ukNowParts();
+  let gross = 0, upcoming = 0;
+  const lessons = rows.map(r => {
+    gross += owedOf(now, r);
+    upcoming += upcomingCostOf(now, r);
+    return { ...publicLesson(r), past: lessonPast(now, r) };
+  });
+  return {
+    name: rows.length ? rows[rows.length - 1].name : '',
+    lessons, gross_owed: gross, credit: meta.credit || 0,
+    owed: Math.max(0, gross - (meta.credit || 0)),
+    upcoming_cost: upcoming, passed: !!meta.passed, meta,
+  };
+}
+
 // --- validation ------------------------------------------------------------
 
 const RE_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -325,56 +386,94 @@ export default {
         });
       }
 
-      // Pupil portal: authenticated by email + any one of their booking refs
-      if (path === '/api/my-lessons' && req.method === 'POST') {
+      // ---- pupil auth ----
+      // No email service on this project, so a booking reference is the proof
+      // of identity for signup and password reset (every pupil gets one).
+      if ((path === '/auth/signup' || path === '/auth/login' || path === '/auth/reset') && req.method === 'POST') {
         const ip = req.headers.get('CF-Connecting-IP') || 'unknown';
-        if (await rateLimited(env, `portal:${ip}`, 30, 3600))
+        if (await rateLimited(env, `auth:${ip}`, 20, 3600))
           return json({ error: 'Too many attempts — please try again later.' }, 429);
         const b = await readBody(req);
         const email = String(b?.email || '').trim().toLowerCase();
-        const ref = String(b?.ref || '').trim().toUpperCase();
-        if (!RE_EMAIL.test(email) || !ref) return json({ error: 'bad request' }, 400);
-        const match = await env.DB.prepare(
-          'SELECT id, name FROM bookings WHERE ref = ? AND email = ?').bind(ref, email).first();
-        if (!match) return json({ error: 'No booking found for that reference and email.' }, 404);
+        const password = String(b?.password || '');
+        if (!RE_EMAIL.test(email)) return json({ error: 'Please give a valid email.' }, 400);
 
-        const rows = (await env.DB.prepare(
-          'SELECT * FROM bookings WHERE email = ? ORDER BY date, time').bind(email).all()).results;
-        const now = ukNowParts();
-        const config = await getSetting(env, 'config', DEFAULT_CONFIG);
-        let owed = 0, upcoming = 0;
-        const lessons = rows.map(r => {
-          owed += owedOf(now, r);
-          upcoming += upcomingCostOf(now, r);
-          return { ...publicLesson(r), past: lessonPast(now, r) };
-        });
-        return json({
-          name: match.name, lessons, owed, upcoming_cost: upcoming,
-          cancel_notice_hours: config.cancel_notice_hours, late_cancel_fee: config.late_cancel_fee,
-        });
+        if (path === '/auth/login') {
+          const u = await env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+          if (!u || (await pbkdf2Hex(password, u.salt)) !== u.pw_hash)
+            return json({ error: 'Wrong email or password.' }, 401);
+          return json({ ok: true, token: await newSession(env, email) });
+        }
+
+        // signup + reset both verify a booking ref belonging to this email
+        if (password.length < 8 || password.length > 200)
+          return json({ error: 'Password must be at least 8 characters.' }, 400);
+        const ref = String(b?.ref || '').trim().toUpperCase();
+        const proof = await env.DB.prepare(
+          'SELECT id FROM bookings WHERE ref = ? AND email = ?').bind(ref, email).first();
+        if (!proof) return json({ error: 'No booking found for that reference and email.' }, 404);
+
+        const salt = randomHex(16);
+        const hash = await pbkdf2Hex(password, salt);
+        if (path === '/auth/signup') {
+          const existing = await env.DB.prepare('SELECT email FROM users WHERE email = ?').bind(email).first();
+          if (existing) return json({ error: 'An account already exists for this email — sign in instead.' }, 409);
+          await env.DB.prepare('INSERT INTO users (email, pw_hash, salt, created_at) VALUES (?, ?, ?, ?)')
+            .bind(email, hash, salt, Math.floor(Date.now() / 1000)).run();
+        } else { // reset: replace password, sign out everywhere
+          const existing = await env.DB.prepare('SELECT email FROM users WHERE email = ?').bind(email).first();
+          if (!existing) return json({ error: 'No account for this email — create one instead.' }, 404);
+          await env.DB.prepare('UPDATE users SET pw_hash = ?, salt = ? WHERE email = ?')
+            .bind(hash, salt, email).run();
+          await env.DB.prepare('DELETE FROM sessions WHERE email = ?').bind(email).run();
+        }
+        return json({ ok: true, token: await newSession(env, email) });
       }
 
-      if (path === '/api/cancel' && req.method === 'POST') {
-        const b = await readBody(req);
-        const email = String(b?.email || '').trim().toLowerCase();
-        const ref = String(b?.ref || '').trim().toUpperCase();
-        if (!RE_EMAIL.test(email) || !ref) return json({ error: 'bad request' }, 400);
-        const row = await env.DB.prepare(
-          'SELECT * FROM bookings WHERE ref = ? AND email = ?').bind(ref, email).first();
-        if (!row) return json({ error: 'No booking found for that reference and email.' }, 404);
-        if (row.status === 'cancelled') return json({ error: 'That lesson is already cancelled.' }, 409);
-        const now = ukNowParts();
-        if (lessonPast(now, row)) return json({ error: 'That lesson has already taken place.' }, 409);
+      if (path === '/auth/logout' && req.method === 'POST') {
+        const tok = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+        if (/^[0-9a-f]{64}$/.test(tok))
+          await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha256Hex(tok)).run();
+        return json({ ok: true });
+      }
 
-        const config = await getSetting(env, 'config', DEFAULT_CONFIG);
-        const late = minsUntil(now, row.date, row.time) < config.cancel_notice_hours * 60;
-        const fee = late ? config.late_cancel_fee : 0;
-        await env.DB.prepare(
-          "UPDATE bookings SET status = 'cancelled', cancelled_by = 'student', fee = ?, paid = 0 WHERE id = ?"
-        ).bind(fee, row.id).run();
-        notify(env, ctx, late ? 'Late cancellation by pupil' : 'Booking cancelled by pupil',
-          `${row.date} ${row.time} — ${row.name}\nRef ${ref}${late ? `\nLate-cancel fee £${fee} added` : ''}`);
-        return json({ ok: true, late, fee });
+      // ---- pupil portal (session-gated) ----
+      if (path.startsWith('/me/')) {
+        const email = await sessionEmail(req, env);
+        if (!email) return json({ error: 'unauthorized' }, 401);
+
+        if (path === '/me/lessons' && req.method === 'GET') {
+          const acc = await accountFor(env, email);
+          const config = await getSetting(env, 'config', DEFAULT_CONFIG);
+          return json({
+            email, name: acc.name, lessons: acc.lessons,
+            owed: acc.owed, gross_owed: acc.gross_owed, credit: acc.credit,
+            upcoming_cost: acc.upcoming_cost, passed: acc.passed,
+            cancel_notice_hours: config.cancel_notice_hours, late_cancel_fee: config.late_cancel_fee,
+          });
+        }
+
+        if (path === '/me/cancel' && req.method === 'POST') {
+          const b = await readBody(req);
+          const ref = String(b?.ref || '').trim().toUpperCase();
+          if (!ref) return json({ error: 'bad request' }, 400);
+          const row = await env.DB.prepare(
+            'SELECT * FROM bookings WHERE ref = ? AND email = ?').bind(ref, email).first();
+          if (!row) return json({ error: 'No such lesson on your account.' }, 404);
+          if (row.status === 'cancelled') return json({ error: 'That lesson is already cancelled.' }, 409);
+          const now = ukNowParts();
+          if (lessonPast(now, row)) return json({ error: 'That lesson has already taken place.' }, 409);
+
+          const config = await getSetting(env, 'config', DEFAULT_CONFIG);
+          const late = minsUntil(now, row.date, row.time) < config.cancel_notice_hours * 60;
+          const fee = late ? config.late_cancel_fee : 0;
+          await env.DB.prepare(
+            "UPDATE bookings SET status = 'cancelled', cancelled_by = 'student', fee = ?, paid = 0 WHERE id = ?"
+          ).bind(fee, row.id).run();
+          notify(env, ctx, late ? 'Late cancellation by pupil' : 'Booking cancelled by pupil',
+            `${row.date} ${row.time} — ${row.name}\nRef ${ref}${late ? `\nLate-cancel fee £${fee} added` : ''}`);
+          return json({ ok: true, late, fee });
+        }
       }
 
       // ---- admin ----
@@ -387,6 +486,17 @@ export default {
             ? env.DB.prepare('SELECT * FROM bookings WHERE status = ? ORDER BY date, time LIMIT 500').bind(status)
             : env.DB.prepare("SELECT * FROM bookings WHERE date >= date('now', '-7 day') ORDER BY date, time LIMIT 500");
           return json({ bookings: (await q.all()).results });
+        }
+
+        // Month/range view: bookings (all statuses) + blocked-out dates
+        if (path === '/admin/calendar' && req.method === 'GET') {
+          const from = url.searchParams.get('from'), to = url.searchParams.get('to');
+          if (!RE_DATE.test(from || '') || !RE_DATE.test(to || '') || daysBetween(from, to) > 62)
+            return json({ error: 'bad params' }, 400);
+          const bookings = (await env.DB.prepare(
+            'SELECT * FROM bookings WHERE date >= ? AND date <= ? ORDER BY date, time'
+          ).bind(from, to).all()).results;
+          return json({ bookings, blocked: [...await blockedDates(env, from, to)] });
         }
 
         if (path === '/admin/booking' && req.method === 'POST') {
@@ -414,13 +524,16 @@ export default {
         }
 
         if (path === '/admin/students' && req.method === 'GET') {
+          const wantPassed = url.searchParams.get('passed') === '1';
           const rows = (await env.DB.prepare('SELECT * FROM bookings ORDER BY created_at').all()).results;
+          const metas = new Map((await env.DB.prepare('SELECT * FROM students').all())
+            .results.map(m => [m.email, m]));
           const now = ukNowParts();
           const map = new Map();
           for (const r of rows) {
             const s = map.get(r.email) || {
               email: r.email, name: r.name, phone: r.phone, postcode: r.postcode,
-              lessons: 0, upcoming: 0, cancelled: 0, owed: 0, upcoming_cost: 0,
+              lessons: 0, upcoming: 0, cancelled: 0, gross_owed: 0, upcoming_cost: 0,
             };
             // Latest booking wins for contact details
             s.name = r.name; s.phone = r.phone; s.postcode = r.postcode;
@@ -428,10 +541,18 @@ export default {
               s.lessons++;
               if (!lessonPast(now, r)) { s.upcoming++; s.upcoming_cost += r.price; }
             } else s.cancelled++;
-            s.owed += owedOf(now, r);
+            s.gross_owed += owedOf(now, r);
             map.set(r.email, s);
           }
-          const students = [...map.values()].sort((a, b2) => b2.owed - a.owed || a.name.localeCompare(b2.name));
+          const students = [...map.values()].map(s => {
+            const m = metas.get(s.email) || {};
+            s.credit = m.credit || 0;
+            s.passed = !!m.passed;
+            s.has_notes = !!(m.notes && m.notes.trim());
+            s.owed = Math.max(0, s.gross_owed - s.credit);
+            return s;
+          }).filter(s => s.passed === wantPassed)
+            .sort((a, b2) => b2.owed - a.owed || a.name.localeCompare(b2.name));
           return json({ students });
         }
 
@@ -441,9 +562,57 @@ export default {
           const rows = (await env.DB.prepare(
             'SELECT * FROM bookings WHERE email = ? ORDER BY date DESC, time DESC').bind(email).all()).results;
           const now = ukNowParts();
+          const meta = await studentMeta(env, email);
+          const gross = rows.reduce((a, r) => a + owedOf(now, r), 0);
+          const hasAccount = !!(await env.DB.prepare(
+            'SELECT email FROM users WHERE email = ?').bind(email).first());
           return json({
             lessons: rows.map(r => ({ ...r, past: lessonPast(now, r), owed_now: owedOf(now, r) })),
+            meta: { notes: meta.notes || '', passed: !!meta.passed, credit: meta.credit || 0 },
+            gross_owed: gross, owed: Math.max(0, gross - (meta.credit || 0)),
+            has_account: hasAccount,
           });
+        }
+
+        if (path === '/admin/student-meta' && req.method === 'POST') {
+          const b = await readBody(req);
+          const email = String(b?.email || '').trim().toLowerCase();
+          if (!RE_EMAIL.test(email)) return json({ error: 'bad request' }, 400);
+          const m = await studentMeta(env, email);
+          if (typeof b.notes === 'string') m.notes = b.notes.slice(0, 2000);
+          if (typeof b.passed === 'boolean') m.passed = b.passed ? 1 : 0;
+          await putStudentMeta(env, { ...m, email });
+          return json({ ok: true, meta: { notes: m.notes || '', passed: !!m.passed, credit: m.credit || 0 } });
+        }
+
+        if (path === '/admin/credit' && req.method === 'POST') {
+          const b = await readBody(req);
+          const email = String(b?.email || '').trim().toLowerCase();
+          const delta = parseFloat(b?.delta);
+          if (!RE_EMAIL.test(email) || !Number.isFinite(delta) || Math.abs(delta) > 5000)
+            return json({ error: 'bad request' }, 400);
+          const m = await studentMeta(env, email);
+          m.credit = Math.max(0, Math.round(((m.credit || 0) + delta) * 100) / 100);
+          await putStudentMeta(env, { ...m, email });
+          return json({ ok: true, credit: m.credit });
+        }
+
+        // Settle one unpaid lesson (or cancellation fee) from the pupil's credit
+        if (path === '/admin/pay-from-credit' && req.method === 'POST') {
+          const b = await readBody(req);
+          if (!b || !Number.isInteger(b.id)) return json({ error: 'bad request' }, 400);
+          const row = await env.DB.prepare('SELECT * FROM bookings WHERE id = ?').bind(b.id).first();
+          if (!row) return json({ error: 'not found' }, 404);
+          if (row.paid) return json({ error: 'Already marked paid.' }, 409);
+          const amount = row.status === 'cancelled' ? row.fee : row.price;
+          if (!(amount > 0)) return json({ error: 'Nothing to charge for this lesson.' }, 400);
+          const m = await studentMeta(env, row.email);
+          if ((m.credit || 0) < amount)
+            return json({ error: `Not enough credit (£${m.credit || 0} available, £${amount} needed).` }, 409);
+          m.credit = Math.round((m.credit - amount) * 100) / 100;
+          await putStudentMeta(env, { ...m, email: row.email });
+          await env.DB.prepare('UPDATE bookings SET paid = 1 WHERE id = ?').bind(b.id).run();
+          return json({ ok: true, credit: m.credit });
         }
 
         if (path === '/admin/schedule' && req.method === 'GET') {

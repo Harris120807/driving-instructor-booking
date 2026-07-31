@@ -12,10 +12,10 @@ one origin) + D1.
 
 | Path | What it is |
 |---|---|
-| `public/index.html` | Public booking page — price/length picker, availability calendar, booking form (with "repeat weekly for 4/8/12 weeks"), and the **My lessons** pupil portal (sign in with email + any booking ref: money owed, upcoming lesson costs, past/future lessons with per-lesson cancel). |
-| `public/admin.html` | Instructor console — 4 tabs: **Bookings** (confirm/cancel), **Students** (per-pupil accounts: lessons, money owed, mark paid), **Availability** (weekly hours + time-off date ranges with auto-cancel), **Settings** (prices, booking-notice vs cancellation-notice, late fee, horizon). |
-| `worker/worker.js` | The Worker: public `/api/config`, `/api/slots`, `/api/book`, `/api/my-lessons`, `/api/cancel`; admin `/admin/bookings`, `/admin/booking`, `/admin/paid`, `/admin/students`, `/admin/student`, `/admin/schedule`, `/admin/override`, `/admin/settings`. |
-| `worker/schema.sql` | D1 schema: `settings`, `bookings` (price/paid/fee/cancelled_by/series), `overrides` (date ranges), `attempts`. |
+| `public/index.html` | Public booking page — price/length picker, availability calendar, booking form (with "repeat weekly for 4/8/12 weeks"), and the **My lessons** pupil portal: email+password accounts (signup/reset proven by a booking ref), money owed, lesson credit, upcoming costs, per-lesson cancel. |
+| `public/admin.html` | Instructor console — 5 tabs: **Bookings** (weekly series collapsed to one ↻-badged line, expand/confirm-all/cancel-all), **Calendar** (month grid: lessons color-coded by status, time off shaded), **Students** (Active/Passed lists; per-pupil account: lessons, owed, mark paid, pay-from-credit, credit top-ups, private notes, mark-as-passed), **Availability**, **Settings**. |
+| `worker/worker.js` | The Worker: public `/api/config`, `/api/slots`, `/api/book`; pupil `/auth/signup`, `/auth/login`, `/auth/reset`, `/auth/logout`, `/me/lessons`, `/me/cancel`; admin `/admin/bookings`, `/admin/booking`, `/admin/calendar`, `/admin/paid`, `/admin/students`, `/admin/student`, `/admin/student-meta`, `/admin/credit`, `/admin/pay-from-credit`, `/admin/schedule`, `/admin/override`, `/admin/settings`. |
+| `worker/schema.sql` | D1 schema: `settings`, `bookings` (price/paid/fee/cancelled_by/series), `overrides` (date ranges), `students` (notes/passed/credit), `users`, `sessions`, `attempts`. |
 | `wrangler.toml` | Worker + assets + D1 binding config. |
 
 ## Business rules (the contract — keep code and copy in sync)
@@ -44,8 +44,21 @@ one origin) + D1.
   skip the horizon check (that's the point) but still respect availability —
   unavailable weeks are skipped and reported back. All lessons in a series
   share a `series` id but have individual refs and cancel individually.
-- **Pupil portal auth** = email + any one of their booking refs (refs are
-  6-char unguessable codes). Rate-limited 30/h/IP; booking is 5/h/IP.
+- **Pupil accounts**: email + password (PBKDF2-SHA256 100k, per-user salt;
+  90-day bearer sessions stored hashed). There is NO email service on this
+  project, so **signup and password reset require a booking reference**
+  belonging to that email as proof of identity (refs are 6-char unguessable
+  codes) — this is what stops someone registering another person's email and
+  reading their lessons. Password reset signs out all sessions. Auth is
+  rate-limited 20/h/IP; booking 5/h/IP.
+- **Credit**: per-pupil prepaid balance (`students.credit`), topped
+  up/deducted by the instructor. Displayed owed = gross owed − credit
+  (floor 0). "Pay from credit" settles one lesson/fee atomically (marks paid
+  + deducts); insufficient credit is rejected server-side.
+- **Passed**: `students.passed` removes the pupil from the default Students
+  list (they move to the Passed list, owed money still visible; portal shows
+  a congratulations note). Instructor **notes** are private — served only via
+  `/admin/*`, never in any pupil-facing response.
 - Slots are computed (weekly template − blocked ranges − bookings) on a
   30-min grid for 60/90/120-min lessons with overlap checks; `/api/book`
   re-validates server-side (409 if taken).

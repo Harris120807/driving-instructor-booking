@@ -42,6 +42,31 @@ CREATE TABLE IF NOT EXISTS overrides (
   note       TEXT DEFAULT ''
 );
 
+-- Instructor-maintained per-pupil record (keyed by booking email)
+CREATE TABLE IF NOT EXISTS students (
+  email      TEXT PRIMARY KEY,
+  notes      TEXT NOT NULL DEFAULT '',
+  passed     INTEGER NOT NULL DEFAULT 0,     -- 1 = passed their test (hidden from default list)
+  credit     REAL NOT NULL DEFAULT 0,        -- £ prepaid balance
+  updated_at INTEGER
+);
+
+-- Pupil login accounts (signup requires a booking ref as proof of identity —
+-- there is no email-verification service on this project)
+CREATE TABLE IF NOT EXISTS users (
+  email      TEXT PRIMARY KEY,               -- lowercased, matches bookings.email
+  pw_hash    TEXT NOT NULL,                  -- PBKDF2-SHA256 100k iters
+  salt       TEXT NOT NULL,                  -- per-user random hex
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY,               -- sha256 of the bearer token
+  email      TEXT NOT NULL,
+  expires    INTEGER NOT NULL                -- epoch seconds
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_email ON sessions(email);
+
 -- Simple rate limiting for public endpoints
 CREATE TABLE IF NOT EXISTS attempts (
   bucket TEXT NOT NULL,                       -- e.g. 'book:<ip>'

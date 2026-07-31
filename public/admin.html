@@ -85,6 +85,22 @@
   .ovrow { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
   tr.srow { cursor: pointer; }
   tr.srow:hover td { background: var(--accent-soft); }
+  .wk { background: var(--accent); color: #fff; border-radius: 999px; padding: 1px 8px;
+    font-size: .75rem; font-weight: 700; white-space: nowrap; }
+  tr.subrow td { border-left: 3px solid var(--accent); background: rgba(26,122,74,.04); }
+  .calgrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; min-width: 640px; }
+  .calwrap { overflow-x: auto; }
+  .calday { border: 1px solid var(--border); border-radius: 8px; min-height: 86px;
+    padding: 4px; font-size: .75rem; overflow: hidden; }
+  .calday.blocked { background: rgba(194,59,59,.08); }
+  .calday.empty { border: none; }
+  .calday.today { border: 2px solid var(--accent); }
+  .calday .dn { font-weight: 700; margin-bottom: 2px; }
+  .calchip { display: block; border-radius: 5px; padding: 1px 4px; margin-bottom: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+  .calchip.confirmed { background: var(--accent-soft); color: var(--good); }
+  .calchip.pending { background: rgba(176,125,16,.15); color: var(--warn); }
+  .calchip.cancelled { background: rgba(194,59,59,.12); color: var(--bad); text-decoration: line-through; }
 </style>
 </head>
 <body>
@@ -109,6 +125,7 @@
 
     <div class="tabs" id="tabs">
       <button class="tab sel" data-pane="bookings">Bookings</button>
+      <button class="tab" data-pane="calendar">Calendar</button>
       <button class="tab" data-pane="students">Students</button>
       <button class="tab" data-pane="schedule">Availability</button>
       <button class="tab" data-pane="settings">Settings</button>
@@ -132,19 +149,60 @@
       </div>
     </div>
 
+    <div class="pane" id="pane-calendar">
+      <div class="card">
+        <div class="topbar">
+          <button class="btn ghost sm" id="calPrev">← Prev</button>
+          <h2 id="calTitle" style="margin:0"></h2>
+          <button class="btn ghost sm" id="calNext">Next →</button>
+        </div>
+        <div class="calwrap" style="margin-top:12px">
+          <div class="calgrid" id="calHead"></div>
+          <div class="calgrid" id="calBody" style="margin-top:4px"></div>
+        </div>
+        <p class="muted" style="margin-top:10px">Green = confirmed, amber = pending, struck-through = cancelled, ↻ = weekly lesson, red-tinted day = time off. Hover a lesson for full details.</p>
+        <div class="msg" id="calMsg"></div>
+      </div>
+    </div>
+
     <div class="pane" id="pane-students">
       <div class="card">
         <h2>Students &amp; accounts</h2>
-        <p class="muted">One row per pupil. “Owed” = past lessons not yet paid + unpaid late-cancellation fees. Click a row for their full account.</p>
+        <p class="muted">One row per pupil. “Owed” = past lessons not yet paid + unpaid late-cancellation fees, minus any credit. Click a row for their full account. Pupils marked as passed move to the Passed list.</p>
+        <div class="filters" id="passedFilters">
+          <button class="chip sel" data-passed="">Active</button>
+          <button class="chip" data-passed="1">Passed 🎉</button>
+        </div>
         <div style="overflow-x:auto">
           <table>
-            <thead><tr><th>Pupil</th><th>Contact</th><th>Lessons</th><th>Upcoming</th><th>Upcoming cost</th><th>Owed</th></tr></thead>
-            <tbody id="studentsBody"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+            <thead><tr><th>Pupil</th><th>Contact</th><th>Lessons</th><th>Upcoming</th><th>Upcoming cost</th><th>Credit</th><th>Owed</th></tr></thead>
+            <tbody id="studentsBody"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
           </table>
         </div>
       </div>
       <div class="card" id="studentDetail" style="display:none">
-        <h2 id="sdTitle"></h2>
+        <div class="topbar">
+          <h2 id="sdTitle" style="margin:0"></h2>
+          <button class="btn ghost sm" id="sdPassed"></button>
+        </div>
+        <p class="muted" id="sdAccount"></p>
+        <div class="grid" style="margin:12px 0">
+          <div>
+            <div class="field"><label for="sdNotes">Instructor notes (private — the pupil never sees these)</label>
+              <textarea id="sdNotes" rows="4" maxlength="2000" style="width:100%"></textarea></div>
+            <button class="btn sm" id="sdSaveNotes">Save notes</button>
+          </div>
+          <div>
+            <div class="field"><label>Lesson credit (prepaid balance)</label>
+              <div style="font-size:1.3rem;font-weight:700" id="sdCredit">£0</div></div>
+            <div class="ovrow">
+              <input type="number" id="sdCreditAmt" step="0.5" placeholder="£ amount" style="width:110px">
+              <button class="btn sm" id="sdCreditAdd">Add</button>
+              <button class="btn ghost sm" id="sdCreditSub">Deduct</button>
+            </div>
+            <p class="muted">Use “Pay from credit” on a lesson to settle it from this balance.</p>
+          </div>
+        </div>
         <div style="overflow-x:auto">
           <table>
             <thead><tr><th>When</th><th>Length</th><th>£</th><th>Status</th><th>Payment</th></tr></thead>
@@ -280,6 +338,7 @@ function enter() {
   $('login').style.display = 'none';
   $('console').style.display = 'block';
   loadBookings();
+  loadCalendar();
   loadStudents();
   loadSchedule();
   loadSettings();
@@ -297,18 +356,20 @@ document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('sel', x === t));
   document.querySelectorAll('.pane').forEach(p =>
     p.classList.toggle('sel', p.id === 'pane-' + t.dataset.pane));
+  if (t.dataset.pane === 'calendar') loadCalendar(); // always fresh
 });
 
 // --- demo fixtures ---
 function demoBookings() {
   const day = off => { const d = new Date(); d.setDate(d.getDate() + off); return d.toISOString().slice(0, 10); };
+  const wk = (off, i) => ({ id: 10 + i, ref: 'P3T8W' + i, series: 'S1AB2C', date: day(off), time: '14:30',
+    duration_min: 120, price: 88, name: 'Another Pupil', email: 'p2@example.com', phone: '07700 900456',
+    postcode: 'LS6 2AA', notes: '', status: i === 0 ? 'confirmed' : 'pending', cancelled_by: null, fee: 0, paid: 0 });
   return [
     { id: 1, ref: 'K7M2XQ', series: null, date: day(2), time: '10:00', duration_min: 60, price: 44,
       name: 'Sample Pupil', email: 'pupil@example.com', phone: '07700 900123',
       postcode: 'LS1 4AB', notes: 'Nervous beginner', status: 'pending', cancelled_by: null, fee: 0, paid: 0 },
-    { id: 2, ref: 'P3T8WN', series: 'S1AB2C', date: day(3), time: '14:30', duration_min: 120, price: 88,
-      name: 'Another Pupil', email: 'p2@example.com', phone: '07700 900456',
-      postcode: 'LS6 2AA', notes: '', status: 'confirmed', cancelled_by: null, fee: 0, paid: 0 },
+    wk(3, 0), wk(10, 1), wk(17, 2), wk(24, 3),
     { id: 3, ref: 'H9Q4RD', series: null, date: day(-3), time: '11:00', duration_min: 60, price: 44,
       name: 'Sample Pupil', email: 'pupil@example.com', phone: '07700 900123',
       postcode: 'LS1 4AB', notes: '', status: 'confirmed', cancelled_by: null, fee: 0, paid: 0 },
@@ -317,14 +378,20 @@ function demoBookings() {
 function demoStudents() {
   return [
     { email: 'pupil@example.com', name: 'Sample Pupil', phone: '07700 900123', postcode: 'LS1 4AB',
-      lessons: 2, upcoming: 1, cancelled: 0, owed: 44, upcoming_cost: 44 },
+      lessons: 2, upcoming: 1, cancelled: 0, gross_owed: 44, owed: 44, upcoming_cost: 44,
+      credit: 0, passed: false, has_notes: true, notes: 'Nervous at roundabouts — extra practice.' },
     { email: 'p2@example.com', name: 'Another Pupil', phone: '07700 900456', postcode: 'LS6 2AA',
-      lessons: 1, upcoming: 1, cancelled: 0, owed: 0, upcoming_cost: 88 },
+      lessons: 4, upcoming: 4, cancelled: 0, gross_owed: 0, owed: 0, upcoming_cost: 352,
+      credit: 100, passed: false, has_notes: false, notes: '' },
+    { email: 'passed@example.com', name: 'Passed Pupil', phone: '07700 900789', postcode: 'LS4 1AA',
+      lessons: 20, upcoming: 0, cancelled: 1, gross_owed: 0, owed: 0, upcoming_cost: 0,
+      credit: 0, passed: true, has_notes: false, notes: '' },
   ];
 }
 
 // --- bookings ---
 let bookingsFilter = '';
+const expandedSeries = new Set();
 $('statusFilters').addEventListener('click', e => {
   const c = e.target.closest('.chip'); if (!c) return;
   bookingsFilter = c.dataset.status;
@@ -343,22 +410,96 @@ async function loadBookings() {
   }
   const tb = $('bookingsBody'); tb.innerHTML = '';
   if (!rows.length) { tb.innerHTML = '<tr><td colspan="8" class="muted">No bookings here.</td></tr>'; return; }
+
+  // Collapse weekly series into one line each (order preserved)
+  const groups = [], byS = new Map();
   for (const b of rows) {
+    if (b.series && !byS.has(b.series)) { const g = { series: b.series, rows: [] }; byS.set(b.series, g); groups.push(g); }
+    if (b.series) byS.get(b.series).rows.push(b);
+    else groups.push({ rows: [b] });
+  }
+
+  for (const g of groups) {
+    if (g.rows.length === 1 && !g.series) { tb.appendChild(bookingRow(g.rows[0])); continue; }
+    const b0 = g.rows[0], last = g.rows[g.rows.length - 1];
+    const counts = {};
+    for (const r of g.rows) counts[r.status] = (counts[r.status] || 0) + 1;
     const tr = document.createElement('tr');
+    const dow = new Date(b0.date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long' });
     tr.innerHTML =
-      `<td><b>${fmtWhen(b.date)}</b> ${b.time}${b.series ? '<br><span class="muted">weekly</span>' : ''}</td>` +
-      `<td>${b.duration_min}min</td>` +
-      `<td>${esc(b.name)}${b.notes ? `<br><span class="muted">${esc(b.notes)}</span>` : ''}</td>` +
-      `<td>${esc(b.phone)}<br><span class="muted">${esc(b.email)}</span></td>` +
-      `<td>${esc(b.postcode)}</td>` +
-      `<td>${fmtMoney(b.price)}${b.fee > 0 ? `<br><span class="owed">fee ${fmtMoney(b.fee)}</span>` : ''}</td>` +
-      `<td><span class="st ${b.status}">${b.status}${b.cancelled_by === 'instructor' ? ' (you)' : ''}</span><br><span class="muted">${b.ref}</span></td>` +
+      `<td><span class="wk">↻ WEEKLY ×${g.rows.length}</span><br><b>${dow}s</b> ${b0.time}<br>` +
+      `<span class="muted">${fmtWhen(b0.date)} → ${fmtWhen(last.date)}</span></td>` +
+      `<td>${b0.duration_min}min</td>` +
+      `<td>${esc(b0.name)}${b0.notes ? `<br><span class="muted">${esc(b0.notes)}</span>` : ''}</td>` +
+      `<td>${esc(b0.phone)}<br><span class="muted">${esc(b0.email)}</span></td>` +
+      `<td>${esc(b0.postcode)}</td>` +
+      `<td>${fmtMoney(b0.price)}/wk</td>` +
+      `<td>${Object.entries(counts).map(([s, n]) => `<span class="st ${s}">${n} ${s}</span>`).join('<br>')}</td>` +
       `<td></td>`;
     const actions = tr.lastElementChild;
-    if (b.status === 'pending') actions.append(actBtn('Confirm', 'confirmed', b));
-    if (b.status !== 'cancelled') actions.append(actBtn('Cancel', 'cancelled', b, true));
+    const tog = document.createElement('button');
+    tog.className = 'btn ghost sm'; tog.style.margin = '2px';
+    tog.textContent = expandedSeries.has(g.series) ? 'Hide weeks' : 'Show weeks';
+    tog.onclick = () => {
+      expandedSeries.has(g.series) ? expandedSeries.delete(g.series) : expandedSeries.add(g.series);
+      loadBookings();
+    };
+    actions.appendChild(tog);
+    if (counts.pending) actions.appendChild(seriesBtn('Confirm all', 'confirmed', g,
+      r => r.status === 'pending'));
+    if ((counts.pending || 0) + (counts.confirmed || 0) > 0) actions.appendChild(seriesBtn('Cancel all', 'cancelled', g,
+      r => r.status !== 'cancelled', true));
     tb.appendChild(tr);
+
+    if (expandedSeries.has(g.series)) {
+      for (const r of g.rows) {
+        const sub = bookingRow(r, true);
+        sub.className = 'subrow';
+        tb.appendChild(sub);
+      }
+    }
   }
+}
+
+function bookingRow(b, compact) {
+  const tr = document.createElement('tr');
+  tr.innerHTML =
+    `<td><b>${fmtWhen(b.date)}</b> ${b.time}</td>` +
+    `<td>${b.duration_min}min</td>` +
+    (compact ? '<td colspan="3" class="muted">↻ part of the weekly series</td>'
+      : `<td>${esc(b.name)}${b.notes ? `<br><span class="muted">${esc(b.notes)}</span>` : ''}</td>` +
+        `<td>${esc(b.phone)}<br><span class="muted">${esc(b.email)}</span></td>` +
+        `<td>${esc(b.postcode)}</td>`) +
+    `<td>${fmtMoney(b.price)}${b.fee > 0 ? `<br><span class="owed">fee ${fmtMoney(b.fee)}</span>` : ''}</td>` +
+    `<td><span class="st ${b.status}">${b.status}${b.cancelled_by === 'instructor' ? ' (you)' : ''}</span><br><span class="muted">${b.ref}</span></td>` +
+    `<td></td>`;
+  const actions = tr.lastElementChild;
+  if (b.status === 'pending') actions.append(actBtn('Confirm', 'confirmed', b));
+  if (b.status !== 'cancelled') actions.append(actBtn('Cancel', 'cancelled', b, true));
+  return tr;
+}
+
+function seriesBtn(label, action, g, filter, danger) {
+  const btn = document.createElement('button');
+  btn.className = 'btn sm' + (danger ? ' danger' : '');
+  btn.style.margin = '2px';
+  btn.textContent = label;
+  btn.onclick = async () => {
+    const targets = g.rows.filter(filter);
+    if (danger && !confirm(`Cancel ALL ${targets.length} remaining lessons in ${g.rows[0].name}'s weekly series? (No fee for the pupil.)`)) return;
+    try {
+      for (const r of targets) {
+        if (!DEMO) await api('/admin/booking', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: r.id, action }),
+        });
+        else r.status = action;
+      }
+      ok($('bMsg'), `${targets.length} lesson(s) → ${action}. Remember to tell the pupil.`);
+      loadBookings(); loadStudents();
+    } catch (e) { err($('bMsg'), e.message); }
+  };
+  return btn;
 }
 
 function actBtn(label, action, b, danger) {
@@ -382,22 +523,36 @@ function actBtn(label, action, b, danger) {
 }
 
 // --- students ---
+let passedFilter = '';
+let curStudent = null;
+$('passedFilters').addEventListener('click', e => {
+  const c = e.target.closest('.chip'); if (!c) return;
+  passedFilter = c.dataset.passed;
+  document.querySelectorAll('#passedFilters .chip').forEach(x => x.classList.toggle('sel', x === c));
+  $('studentDetail').style.display = 'none';
+  loadStudents();
+});
+
 async function loadStudents() {
   let students;
-  if (DEMO) students = demoStudents();
+  if (DEMO) students = demoStudents().filter(s => (passedFilter === '1') === !!s.passed);
   else {
-    try { students = (await api('/admin/students')).students; }
-    catch (e) { $('studentsBody').innerHTML = `<tr><td colspan="6" class="muted">${esc(e.message)}</td></tr>`; return; }
+    try { students = (await api('/admin/students' + (passedFilter ? '?passed=1' : ''))).students; }
+    catch (e) { $('studentsBody').innerHTML = `<tr><td colspan="7" class="muted">${esc(e.message)}</td></tr>`; return; }
   }
   const tb = $('studentsBody'); tb.innerHTML = '';
-  if (!students.length) { tb.innerHTML = '<tr><td colspan="6" class="muted">No pupils yet.</td></tr>'; return; }
+  if (!students.length) {
+    tb.innerHTML = `<tr><td colspan="7" class="muted">${passedFilter ? 'Nobody marked as passed yet.' : 'No pupils yet.'}</td></tr>`;
+    return;
+  }
   for (const s of students) {
     const tr = document.createElement('tr');
     tr.className = 'srow';
     tr.innerHTML =
-      `<td><b>${esc(s.name)}</b><br><span class="muted">${esc(s.postcode)}</span></td>` +
+      `<td><b>${esc(s.name)}</b>${s.has_notes ? ' 📝' : ''}<br><span class="muted">${esc(s.postcode)}</span></td>` +
       `<td>${esc(s.phone)}<br><span class="muted">${esc(s.email)}</span></td>` +
       `<td>${s.lessons}</td><td>${s.upcoming}</td><td>${fmtMoney(s.upcoming_cost)}</td>` +
+      `<td>${fmtMoney(s.credit)}</td>` +
       `<td>${s.owed > 0 ? `<span class="owed">${fmtMoney(s.owed)}</span>` : fmtMoney(0)}</td>`;
     tr.onclick = () => loadStudent(s);
     tb.appendChild(tr);
@@ -405,19 +560,74 @@ async function loadStudents() {
 }
 
 async function loadStudent(s) {
+  curStudent = s;
   $('studentDetail').style.display = 'block';
   $('sdTitle').textContent = `${s.name} — account`;
-  let lessons;
+  let lessons, meta, hasAccount;
   if (DEMO) {
     lessons = demoBookings().filter(b => b.email === s.email)
       .map(b => ({ ...b, past: b.date < new Date().toISOString().slice(0, 10), owed_now: 0 }));
+    meta = { notes: s.notes || '', passed: !!s.passed, credit: s.credit || 0 };
+    hasAccount = false;
   } else {
-    try { lessons = (await api('/admin/student?email=' + encodeURIComponent(s.email))).lessons; }
-    catch (e) { err($('sdMsg'), e.message); return; }
+    try {
+      const j = await api('/admin/student?email=' + encodeURIComponent(s.email));
+      lessons = j.lessons; meta = j.meta; hasAccount = j.has_account;
+    } catch (e) { err($('sdMsg'), e.message); return; }
   }
+  $('sdNotes').value = meta.notes;
+  $('sdCredit').textContent = fmtMoney(meta.credit);
+  $('sdPassed').textContent = meta.passed ? '🎉 Passed — move back to Active' : 'Mark as passed';
+  $('sdAccount').textContent = hasAccount
+    ? 'Has an online account (can sign in to see lessons and owed money).'
+    : 'No online account yet — they can create one on the site with any booking reference.';
+  $('sdPassed').onclick = async () => {
+    const to = !meta.passed;
+    if (to && !confirm(`Mark ${s.name} as passed? They move to the Passed list (any owed money stays visible there).`)) return;
+    try {
+      if (!DEMO) await api('/admin/student-meta', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: s.email, passed: to }),
+      });
+      meta.passed = to;
+      ok($('sdMsg'), to ? 'Marked as passed. 🎉' : 'Moved back to the active list.');
+      $('studentDetail').style.display = 'none';
+      loadStudents();
+    } catch (e) { err($('sdMsg'), e.message); }
+  };
+  $('sdSaveNotes').onclick = async () => {
+    try {
+      if (!DEMO) await api('/admin/student-meta', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: s.email, notes: $('sdNotes').value }),
+      });
+      ok($('sdMsg'), 'Notes saved.');
+      loadStudents();
+    } catch (e) { err($('sdMsg'), e.message); }
+  };
+  const adjust = sign => async () => {
+    const amt = parseFloat($('sdCreditAmt').value);
+    if (!Number.isFinite(amt) || amt <= 0) { err($('sdMsg'), 'Enter a £ amount first.'); return; }
+    try {
+      let credit = meta.credit + sign * amt;
+      if (!DEMO) credit = (await api('/admin/credit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: s.email, delta: sign * amt }),
+      })).credit;
+      meta.credit = Math.max(0, credit);
+      $('sdCredit').textContent = fmtMoney(meta.credit);
+      $('sdCreditAmt').value = '';
+      ok($('sdMsg'), 'Credit updated.');
+      loadStudents();
+    } catch (e) { err($('sdMsg'), e.message); }
+  };
+  $('sdCreditAdd').onclick = adjust(1);
+  $('sdCreditSub').onclick = adjust(-1);
+
   const tb = $('studentLessons'); tb.innerHTML = '';
   for (const l of lessons) {
     const tr = document.createElement('tr');
+    const amountVal = l.status === 'cancelled' ? l.fee : l.price;
     let amount = fmtMoney(l.price);
     if (l.status === 'cancelled') amount = l.fee > 0 ? `fee ${fmtMoney(l.fee)}` : '—';
     tr.innerHTML =
@@ -444,8 +654,74 @@ async function loadStudent(s) {
         } catch (e) { err($('sdMsg'), e.message); }
       };
       cell.appendChild(pill);
+      if (!l.paid && amountVal > 0 && meta.credit >= amountVal) {
+        const pc = document.createElement('button');
+        pc.className = 'btn ghost sm';
+        pc.style.marginLeft = '6px';
+        pc.textContent = 'Pay from credit';
+        pc.onclick = async () => {
+          try {
+            if (!DEMO) await api('/admin/pay-from-credit', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: l.id }),
+            });
+            ok($('sdMsg'), `Settled ${fmtMoney(amountVal)} from credit.`);
+            loadStudent(s); loadStudents();
+          } catch (e) { err($('sdMsg'), e.message); }
+        };
+        cell.appendChild(pc);
+      }
     } else cell.innerHTML = '<span class="muted">—</span>';
     tb.appendChild(tr);
+  }
+}
+
+// --- calendar ---
+const calYM = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; })();
+$('calPrev').onclick = () => { if (--calYM.m < 0) { calYM.m = 11; calYM.y--; } loadCalendar(); };
+$('calNext').onclick = () => { if (++calYM.m > 11) { calYM.m = 0; calYM.y++; } loadCalendar(); };
+
+async function loadCalendar() {
+  const first = new Date(Date.UTC(calYM.y, calYM.m, 1));
+  const last = new Date(Date.UTC(calYM.y, calYM.m + 1, 0));
+  const iso = d => d.toISOString().slice(0, 10);
+  let data;
+  if (DEMO) {
+    data = { bookings: demoBookings().filter(b => b.date >= iso(first) && b.date <= iso(last)), blocked: [] };
+  } else {
+    try { data = await api(`/admin/calendar?from=${iso(first)}&to=${iso(last)}`); }
+    catch (e) { err($('calMsg'), e.message); return; }
+  }
+  $('calTitle').textContent = first.toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  $('calHead').innerHTML = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    .map(d => `<div class="muted" style="text-align:center">${d}</div>`).join('');
+  const byDate = {};
+  for (const b of data.bookings) (byDate[b.date] ||= []).push(b);
+  const blocked = new Set(data.blocked);
+  const today = new Date().toISOString().slice(0, 10);
+  const body = $('calBody'); body.innerHTML = '';
+  const lead = (first.getUTCDay() + 6) % 7; // Monday-start grid
+  for (let i = 0; i < lead; i++) {
+    const pad = document.createElement('div');
+    pad.className = 'calday empty';
+    body.appendChild(pad);
+  }
+  for (let day = 1; day <= last.getUTCDate(); day++) {
+    const ds = `${calYM.y}-${String(calYM.m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const cell = document.createElement('div');
+    cell.className = 'calday' + (blocked.has(ds) ? ' blocked' : '') + (ds === today ? ' today' : '');
+    const dn = document.createElement('div');
+    dn.className = 'dn'; dn.textContent = day;
+    cell.appendChild(dn);
+    for (const b of byDate[ds] || []) {
+      const c = document.createElement('span');
+      c.className = 'calchip ' + b.status;
+      c.textContent = `${b.time} ${b.name.split(' ')[0]}${b.series ? ' ↻' : ''}`;
+      c.title = `${b.time} · ${b.duration_min} min · ${b.name} (${b.postcode})` +
+        `${b.series ? ' · weekly' : ''} · ${b.status}${b.notes ? `\n${b.notes}` : ''}`;
+      cell.appendChild(c);
+    }
+    body.appendChild(cell);
   }
 }
 

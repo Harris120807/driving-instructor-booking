@@ -108,6 +108,13 @@
   .st.pending { background: rgba(176,125,16,.15); color: var(--warn); }
   .st.confirmed { background: var(--accent-soft); color: var(--good); }
   .st.cancelled { background: rgba(194,59,59,.12); color: var(--bad); }
+  .seg { display: inline-flex; border: 1.5px solid var(--border); border-radius: 999px; overflow: hidden; margin-bottom: 12px; flex-wrap: wrap; }
+  .seg button {
+    border: 0; background: none; color: var(--text); font: inherit;
+    padding: 7px 16px; cursor: pointer;
+  }
+  .seg button.sel { background: var(--accent); color: #fff; }
+  .topline { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
   .totals { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
   .tot {
     flex: 1 1 160px; border: 1.5px solid var(--border); border-radius: 10px; padding: 12px;
@@ -172,18 +179,33 @@
 
   <div class="card" id="portalCard">
     <h2>My lessons</h2>
-    <p class="muted">See your upcoming and past lessons, what each costs, and cancel if you need to. Sign in with your email and any booking reference you’ve been given.</p>
-    <form id="portalForm">
-      <div class="row2">
-        <div><label for="pEmail">Email used to book</label><input id="pEmail" type="email"></div>
-        <div><label for="pRef">Any booking reference</label><input id="pRef" maxlength="8" placeholder="e.g. K7M2XQ"></div>
+    <div id="authBox">
+      <p class="muted">Track your lessons, what they cost and anything you owe — and cancel when you need to. First time? Create an account with the booking reference from any of your lessons (it proves the email is yours).</p>
+      <div class="seg" id="authSeg">
+        <button type="button" data-mode="login" class="sel">Sign in</button>
+        <button type="button" data-mode="signup">Create account</button>
+        <button type="button" data-mode="reset">Forgot password</button>
       </div>
-      <button class="btn" type="submit">Show my lessons</button>
-      <div class="msg" id="pMsg"></div>
-    </form>
-    <div id="portal" style="display:none; margin-top:16px">
+      <form id="authForm">
+        <div class="row2">
+          <div><label for="aEmail">Email used to book</label><input id="aEmail" type="email" autocomplete="email"></div>
+          <div id="aRefWrap" style="display:none"><label for="aRef">Any booking reference</label><input id="aRef" maxlength="8" placeholder="e.g. K7M2XQ"></div>
+        </div>
+        <label for="aPass" id="aPassLabel">Password</label>
+        <input id="aPass" type="password" autocomplete="current-password">
+        <button class="btn" type="submit" id="authBtn">Sign in</button>
+        <div class="msg" id="pMsg"></div>
+      </form>
+    </div>
+    <div id="portal" style="display:none">
+      <div class="topline">
+        <span>Signed in as <b id="meWho"></b></span>
+        <button class="btn sm" id="meSignOut" style="background:none;color:var(--text);border:1.5px solid var(--border)">Sign out</button>
+      </div>
+      <div class="msg ok" id="passedNote" style="display:none"></div>
       <div class="totals">
         <div class="tot owe"><div class="v" id="tOwed">£0</div><div class="l">Money owed</div></div>
+        <div class="tot"><div class="v" id="tCredit">£0</div><div class="l">Lesson credit</div></div>
         <div class="tot"><div class="v" id="tUpcoming">£0</div><div class="l">Upcoming lessons cost</div></div>
       </div>
       <div style="overflow-x:auto">
@@ -193,6 +215,7 @@
         </table>
       </div>
       <p class="muted" id="portalNote"></p>
+      <div class="msg" id="mMsg"></div>
     </div>
   </div>
 
@@ -368,7 +391,7 @@ $('bookForm').addEventListener('submit', async e => {
       });
     }
     msg.className = 'msg ok';
-    let text = `Request sent! Your reference is ${j.ref} — keep it: it signs you into “My lessons” below. The instructor will confirm shortly.`;
+    let text = `Request sent! Your reference is ${j.ref} — keep it: you’ll use it to create your “My lessons” account below. The instructor will confirm shortly.`;
     if (j.booked.length > 1) text = `Request sent for ${j.booked.length} weekly lessons! Your reference is ${j.ref}.` +
       (j.skipped.length ? ` Unavailable weeks skipped: ${j.skipped.join(', ')}.` : '') +
       ' The instructor will confirm shortly.';
@@ -384,37 +407,89 @@ $('bookForm').addEventListener('submit', async e => {
   }
 });
 
-// --- pupil portal ---
-$('portalForm').addEventListener('submit', async e => {
+// --- pupil portal (email + password accounts) ---
+let SESSION = localStorage.getItem('dl-session') || '';
+let authMode = 'login';
+
+$('authSeg').addEventListener('click', e => {
+  const b = e.target.closest('button[data-mode]');
+  if (!b) return;
+  authMode = b.dataset.mode;
+  for (const x of $('authSeg').children) x.classList.toggle('sel', x === b);
+  $('aRefWrap').style.display = authMode === 'login' ? 'none' : 'block';
+  $('aPassLabel').textContent = authMode === 'reset' ? 'New password' : 'Password';
+  $('aPass').autocomplete = authMode === 'login' ? 'current-password' : 'new-password';
+  $('authBtn').textContent = authMode === 'login' ? 'Sign in'
+    : authMode === 'signup' ? 'Create account' : 'Set new password';
+});
+
+$('authForm').addEventListener('submit', async e => {
   e.preventDefault();
   const m = $('pMsg'); m.className = 'msg';
-  const email = $('pEmail').value.trim(), ref = $('pRef').value.trim();
-  if (!email || !ref) { m.className = 'msg err'; m.textContent = 'Enter both your email and a booking reference.'; return; }
+  const email = $('aEmail').value.trim(), pass = $('aPass').value, ref = $('aRef').value.trim();
+  if (!email || !pass) { m.className = 'msg err'; m.textContent = 'Enter your email and password.'; return; }
+  if (authMode !== 'login' && !ref) {
+    m.className = 'msg err'; m.textContent = 'Enter a booking reference — it’s on any booking confirmation.'; return;
+  }
   try {
-    let j;
-    if (DEMO) {
-      j = { name: 'Sample Pupil', lessons: demoLessons(), owed: 44, upcoming_cost: 88,
-        cancel_notice_hours: CONFIG.cancel_notice_hours, late_cancel_fee: CONFIG.late_cancel_fee };
-    } else {
-      j = await api('/api/my-lessons', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, ref }),
-      });
-    }
-    state.portal = j;
-    state.portalAuth = { email, ref };
-    renderPortal();
+    let token;
+    if (DEMO) token = 'demo';
+    else token = (await api('/auth/' + authMode, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(authMode === 'login' ? { email, password: pass } : { email, password: pass, ref }),
+    })).token;
+    SESSION = token;
+    localStorage.setItem('dl-session', token);
+    $('authForm').reset();
+    await loadMe();
   } catch (err) { m.className = 'msg err'; m.textContent = err.message; }
 });
 
+$('meSignOut').onclick = async () => {
+  if (!DEMO && SESSION) fetch('/auth/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + SESSION } });
+  SESSION = '';
+  localStorage.removeItem('dl-session');
+  state.portal = null;
+  $('portal').style.display = 'none';
+  $('authBox').style.display = 'block';
+};
+
+async function loadMe() {
+  if (!SESSION) return;
+  try {
+    let j;
+    if (DEMO) {
+      j = { email: 'pupil@example.com', name: 'Sample Pupil', lessons: demoLessons(),
+        owed: 44, gross_owed: 44, credit: 20, upcoming_cost: 88, passed: false,
+        cancel_notice_hours: CONFIG.cancel_notice_hours, late_cancel_fee: CONFIG.late_cancel_fee };
+    } else {
+      const r = await fetch('/me/lessons', { headers: { Authorization: 'Bearer ' + SESSION } });
+      if (r.status === 401) { SESSION = ''; localStorage.removeItem('dl-session'); return; }
+      if (!r.ok) throw new Error('Could not load your lessons — please try again.');
+      j = await r.json();
+    }
+    state.portal = j;
+    renderPortal();
+  } catch (err) {
+    const m = $('pMsg'); m.className = 'msg err'; m.textContent = err.message;
+  }
+}
+
 function renderPortal() {
   const j = state.portal;
+  $('authBox').style.display = 'none';
   $('portal').style.display = 'block';
+  $('meWho').textContent = j.name ? `${j.name} (${j.email})` : j.email;
+  const pn = $('passedNote');
+  if (j.passed) { pn.style.display = 'block'; pn.textContent = '🎉 Congratulations on passing your test!'; }
+  else pn.style.display = 'none';
   $('tOwed').textContent = fmtMoney(j.owed);
+  $('tCredit').textContent = fmtMoney(j.credit);
   $('tUpcoming').textContent = fmtMoney(j.upcoming_cost);
   $('portalNote').textContent =
     `Cancelling less than ${j.cancel_notice_hours} hours before a lesson incurs a ` +
-    `${fmtMoney(j.late_cancel_fee)} last-minute cancellation fee. “Owed” covers past unpaid lessons and any cancellation fees.`;
+    `${fmtMoney(j.late_cancel_fee)} last-minute cancellation fee. “Owed” covers past unpaid lessons and any ` +
+    `cancellation fees, minus your lesson credit — pay the instructor directly.`;
   const tb = $('portalBody'); tb.innerHTML = '';
   for (const l of j.lessons) {
     const tr = document.createElement('tr');
@@ -450,23 +525,24 @@ async function cancelLesson(l) {
     ? `You are cancelling within the minimum notice period (${j.cancel_notice_hours} hours) — you will owe a last-minute cancellation fee of ${fmtMoney(j.late_cancel_fee)}.\n\nCancel this lesson?`
     : `You are cancelling before the minimum notice period (${j.cancel_notice_hours} hours) — you will not owe any money for this lesson.\n\nCancel this lesson?`;
   if (!confirm(warning)) return;
-  const m = $('pMsg'); m.className = 'msg';
+  const m = $('mMsg'); m.className = 'msg';
   try {
     let res = { late, fee: late ? j.late_cancel_fee : 0 };
-    if (!DEMO) res = await api('/api/cancel', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ref: l.ref, email: state.portalAuth.email }),
+    if (!DEMO) res = await api('/me/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + SESSION },
+      body: JSON.stringify({ ref: l.ref }),
     });
     m.className = res.late ? 'msg warn' : 'msg ok';
     m.textContent = res.late
       ? `Lesson cancelled. A last-minute cancellation fee of ${fmtMoney(res.fee)} has been added to your account.`
       : 'Lesson cancelled — nothing owed for it.';
-    if (!DEMO) $('portalForm').requestSubmit(); // refresh totals + list
+    if (!DEMO) loadMe(); // refresh totals + list
     else { l.status = 'cancelled'; l.cancelled_by = 'student'; l.fee = res.fee; renderPortal(); }
   } catch (err) { m.className = 'msg err'; m.textContent = err.message; }
 }
 
-loadConfig().then(loadSlots);
+loadConfig().then(() => { loadSlots(); loadMe(); });
 </script>
 </body>
 </html>
