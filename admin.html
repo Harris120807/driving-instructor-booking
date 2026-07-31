@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Instructor Console</title>
+<meta name="robots" content="noindex">
+<style>
+  :root {
+    color-scheme: light dark;
+    --accent: #1a7a4a;
+    --accent-soft: #e6f4ec;
+    --page: #f7f9f8;
+    --card: #ffffff;
+    --text: #14201a;
+    --muted: #5c6b62;
+    --border: rgba(20,32,26,0.12);
+    --good: #1a7a4a;
+    --bad: #c23b3b;
+    --warn: #b07d10;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #3fae77; --accent-soft: #12291d; --page: #0d1411; --card: #16201a;
+      --text: #e8f0eb; --muted: #93a59a; --border: rgba(232,240,235,0.14); --warn: #e0a92e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 16px 16px 60px; }
+  h1 { font-size: 1.3rem; margin: 8px 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 1.05rem; }
+  input, select, textarea, button { font: inherit; color: var(--text); }
+  input, select, textarea { padding: 7px 10px; border: 1.5px solid var(--border);
+    border-radius: 8px; background: var(--page); }
+  input:focus, select:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  .btn { background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 8px 16px; cursor: pointer; font-weight: 600; }
+  .btn.ghost { background: none; color: var(--text); border: 1.5px solid var(--border); }
+  .btn.danger { background: var(--bad); }
+  .btn.sm { padding: 4px 10px; font-size: .85rem; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: .8rem; }
+  .st { border-radius: 999px; padding: 2px 10px; font-size: .78rem; font-weight: 600; }
+  .st.pending { background: rgba(176,125,16,.15); color: var(--warn); }
+  .st.confirmed { background: var(--accent-soft); color: var(--good); }
+  .st.cancelled { background: rgba(194,59,59,.12); color: var(--bad); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .dayrow { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+  .dayrow label.dn { width: 42px; font-weight: 600; }
+  .dayrow input[type=time] { width: 110px; }
+  .muted { color: var(--muted); font-size: .85rem; }
+  .msg { padding: 8px 12px; border-radius: 8px; margin-top: 10px; display: none; font-size: .88rem; }
+  .msg.ok { display: block; background: var(--accent-soft); color: var(--good); }
+  .msg.err { display: block; background: rgba(194,59,59,.12); color: var(--bad); }
+  #login { max-width: 380px; margin: 80px auto; }
+  #console { display: none; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tab { border: 1.5px solid var(--border); background: none; border-radius: 999px;
+    padding: 6px 16px; cursor: pointer; }
+  .tab.sel { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .pane { display: none; }
+  .pane.sel { display: block; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; }
+  .filters { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .chip { border: 1.5px solid var(--border); background: none; border-radius: 999px;
+    padding: 4px 12px; cursor: pointer; font-size: .85rem; }
+  .chip.sel { background: var(--accent-soft); border-color: var(--accent); color: var(--good); }
+  .field { margin-bottom: 10px; }
+  .field label { display: block; font-size: .8rem; color: var(--muted); margin-bottom: 3px; }
+  .field input { width: 100%; }
+  .prices3 { display: flex; gap: 10px; }
+  .prices3 .field { flex: 1; }
+  .ovrow { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="login" class="card">
+    <h2>Instructor sign-in</h2>
+    <p class="muted">Enter your admin key. It stays on this device only.</p>
+    <form id="loginForm">
+      <div class="field"><label for="keyInput">Admin key</label>
+        <input id="keyInput" type="password" autocomplete="current-password" style="width:100%"></div>
+      <button class="btn" type="submit">Sign in</button>
+      <div class="msg" id="loginMsg"></div>
+    </form>
+  </div>
+
+  <div id="console">
+    <div class="topbar">
+      <h1 id="consTitle">Instructor console</h1>
+      <button class="btn ghost sm" id="signOut">Sign out</button>
+    </div>
+
+    <div class="tabs">
+      <button class="tab sel" data-pane="bookings">Bookings</button>
+      <button class="tab" data-pane="schedule">Availability</button>
+      <button class="tab" data-pane="settings">Settings</button>
+    </div>
+
+    <div class="pane sel" id="pane-bookings">
+      <div class="card">
+        <div class="filters" id="statusFilters">
+          <button class="chip sel" data-status="">Upcoming</button>
+          <button class="chip" data-status="pending">Pending</button>
+          <button class="chip" data-status="confirmed">Confirmed</button>
+          <button class="chip" data-status="cancelled">Cancelled</button>
+        </div>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr><th>When</th><th>Lesson</th><th>Pupil</th><th>Contact</th><th>Pickup</th><th>Status</th><th></th></tr></thead>
+            <tbody id="bookingsBody"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="msg" id="bMsg"></div>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-schedule">
+      <div class="grid">
+        <div class="card">
+          <h2>Weekly hours</h2>
+          <p class="muted">Untick a day to take it off. Slots start every 30 minutes within these hours.</p>
+          <div id="weekRows"></div>
+          <button class="btn" id="saveTemplate">Save weekly hours</button>
+          <div class="msg" id="tMsg"></div>
+        </div>
+        <div class="card">
+          <h2>Days off / holidays</h2>
+          <div class="ovrow">
+            <input type="date" id="ovDate">
+            <input type="text" id="ovNote" placeholder="note (optional)" style="flex:1">
+            <button class="btn sm" id="addOv">Block day</button>
+          </div>
+          <div id="ovList" class="muted">Loading…</div>
+          <div class="msg" id="oMsg"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-settings">
+      <div class="card" style="max-width:560px">
+        <h2>Business details</h2>
+        <div class="field"><label for="sName">Business / instructor name</label><input id="sName" maxlength="100"></div>
+        <div class="field"><label for="sArea">Area covered (shown on the site)</label><input id="sArea" maxlength="200"></div>
+        <div class="field"><label for="sPhone">Phone</label><input id="sPhone" maxlength="30"></div>
+        <div class="field"><label for="sEmail">Email</label><input id="sEmail" type="email" maxlength="200"></div>
+        <h2 style="margin-top:18px">Prices (£)</h2>
+        <div class="prices3">
+          <div class="field"><label for="p60">1 hour</label><input id="p60" type="number" min="0" step="0.5"></div>
+          <div class="field"><label for="p90">1½ hours</label><input id="p90" type="number" min="0" step="0.5"></div>
+          <div class="field"><label for="p120">2 hours</label><input id="p120" type="number" min="0" step="0.5"></div>
+        </div>
+        <h2 style="margin-top:18px">Booking rules</h2>
+        <div class="prices3">
+          <div class="field"><label for="sNotice">Min notice (hours)</label><input id="sNotice" type="number" min="0" max="72"></div>
+          <div class="field"><label for="sHorizon">Book ahead (days)</label><input id="sHorizon" type="number" min="1" max="90"></div>
+        </div>
+        <button class="btn" id="saveSettings">Save settings</button>
+        <div class="msg" id="sMsg"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+// Same Worker URL as index.html. Empty = preview mode (sample data, nothing saved).
+const API_BASE = '';
+
+const $ = id => document.getElementById(id);
+const DEMO = !API_BASE;
+const DAYS = [['mon','Mon'],['tue','Tue'],['wed','Wed'],['thu','Thu'],['fri','Fri'],['sat','Sat'],['sun','Sun']];
+let KEY = sessionStorage.getItem('di-admin-key') || '';
+
+async function api(path, opts = {}) {
+  opts.headers = { ...(opts.headers || {}), Authorization: 'Bearer ' + KEY };
+  const r = await fetch(API_BASE + path, opts);
+  if (r.status === 401) { signOut(); throw new Error('Signed out — key not accepted.'); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'Request failed');
+  return j;
+}
+
+function flash(el, ok, text) {
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+  el.textContent = text;
+  setTimeout(() => { el.className = 'msg'; }, 4000);
+}
+
+function signOut() {
+  KEY = '';
+  sessionStorage.removeItem('di-admin-key');
+  $('console').style.display = 'none';
+  $('login').style.display = 'block';
+}
+
+async function signIn(key) {
+  KEY = key;
+  if (DEMO) { enter(); return; }
+  await api('/admin/settings'); // 401s if wrong
+  sessionStorage.setItem('di-admin-key', key);
+  enter();
+}
+
+function enter() {
+  $('login').style.display = 'none';
+  $('console').style.display = 'block';
+  loadBookings();
+  loadSchedule();
+  loadSettings();
+}
+
+$('loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  try { await signIn($('keyInput').value.trim()); }
+  catch (err) { flash($('loginMsg'), false, err.message); }
+});
+$('signOut').onclick = signOut;
+
+// Tabs — NOTE: pane list is driven by data-pane attributes, nothing hard-coded
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('sel', x === t));
+  document.querySelectorAll('.pane').forEach(p =>
+    p.classList.toggle('sel', p.id === 'pane-' + t.dataset.pane));
+});
+
+// --- demo fixtures ---
+function demoBookings() {
+  const d1 = new Date(); d1.setDate(d1.getDate() + 2);
+  const d2 = new Date(); d2.setDate(d2.getDate() + 3);
+  return [
+    { id: 1, ref: 'K7M2XQ', date: d1.toISOString().slice(0,10), time: '10:00', duration_min: 60,
+      lesson_type: 'manual', name: 'Sample Pupil', email: 'pupil@example.com', phone: '07700 900123',
+      postcode: 'LS1 4AB', notes: 'Nervous beginner', status: 'pending' },
+    { id: 2, ref: 'P3T8WN', date: d2.toISOString().slice(0,10), time: '14:30', duration_min: 120,
+      lesson_type: 'automatic', name: 'Another Pupil', email: 'p2@example.com', phone: '07700 900456',
+      postcode: 'LS6 2AA', notes: '', status: 'confirmed' },
+  ];
+}
+
+// --- bookings ---
+let bookingsFilter = '';
+$('statusFilters').addEventListener('click', e => {
+  const c = e.target.closest('.chip'); if (!c) return;
+  bookingsFilter = c.dataset.status;
+  document.querySelectorAll('#statusFilters .chip').forEach(x => x.classList.toggle('sel', x === c));
+  loadBookings();
+});
+
+async function loadBookings() {
+  let rows;
+  if (DEMO) {
+    rows = demoBookings().filter(b => !bookingsFilter || b.status === bookingsFilter);
+  } else {
+    try {
+      rows = (await api('/admin/bookings' + (bookingsFilter ? '?status=' + bookingsFilter : ''))).bookings;
+    } catch (err) { flash($('bMsg'), false, err.message); return; }
+  }
+  const tb = $('bookingsBody'); tb.innerHTML = '';
+  if (!rows.length) { tb.innerHTML = '<tr><td colspan="7" class="muted">No bookings here.</td></tr>'; return; }
+  for (const b of rows) {
+    const tr = document.createElement('tr');
+    const when = new Date(b.date + 'T12:00:00')
+      .toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    tr.innerHTML =
+      `<td><b>${when}</b> ${b.time}</td>` +
+      `<td>${b.duration_min}min ${b.lesson_type}</td>` +
+      `<td>${esc(b.name)}${b.notes ? `<br><span class="muted">${esc(b.notes)}</span>` : ''}</td>` +
+      `<td>${esc(b.phone)}<br><span class="muted">${esc(b.email)}</span></td>` +
+      `<td>${esc(b.postcode)}</td>` +
+      `<td><span class="st ${b.status}">${b.status}</span><br><span class="muted">${b.ref}</span></td>` +
+      `<td></td>`;
+    const actions = tr.lastElementChild;
+    if (b.status === 'pending') actions.append(actBtn('Confirm', 'confirmed', b));
+    if (b.status !== 'cancelled') actions.append(actBtn('Cancel', 'cancelled', b, true));
+    tb.appendChild(tr);
+  }
+}
+
+function actBtn(label, action, b, danger) {
+  const btn = document.createElement('button');
+  btn.className = 'btn sm' + (danger ? ' danger' : '');
+  btn.style.margin = '2px';
+  btn.textContent = label;
+  btn.onclick = async () => {
+    if (danger && !confirm(`Cancel ${b.name}'s lesson on ${b.date} ${b.time}?`)) return;
+    try {
+      if (!DEMO) await api('/admin/booking', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: b.id, action }),
+      });
+      else b.status = action;
+      flash($('bMsg'), true, `${b.ref} → ${action}. Remember to tell the pupil.`);
+      loadBookings();
+    } catch (err) { flash($('bMsg'), false, err.message); }
+  };
+  return btn;
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g,
+    c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+// --- schedule ---
+let TEMPLATE = {
+  mon:{start:'09:00',end:'18:00'}, tue:{start:'09:00',end:'18:00'}, wed:{start:'09:00',end:'18:00'},
+  thu:{start:'09:00',end:'18:00'}, fri:{start:'09:00',end:'18:00'}, sat:{start:'09:00',end:'13:00'}, sun:null,
+};
+
+async function loadSchedule() {
+  let overrides = [];
+  if (!DEMO) {
+    try {
+      const j = await api('/admin/schedule');
+      TEMPLATE = j.template; overrides = j.overrides;
+    } catch (err) { flash($('tMsg'), false, err.message); }
+  }
+  renderWeek();
+  renderOverrides(overrides);
+}
+
+function renderWeek() {
+  const w = $('weekRows'); w.innerHTML = '';
+  for (const [k, label] of DAYS) {
+    const d = TEMPLATE[k];
+    const row = document.createElement('div');
+    row.className = 'dayrow';
+    row.innerHTML =
+      `<input type="checkbox" id="on-${k}" ${d ? 'checked' : ''}>` +
+      `<label class="dn" for="on-${k}">${label}</label>` +
+      `<input type="time" id="st-${k}" value="${d ? d.start : '09:00'}" ${d ? '' : 'disabled'}>` +
+      `<span class="muted">to</span>` +
+      `<input type="time" id="en-${k}" value="${d ? d.end : '18:00'}" ${d ? '' : 'disabled'}>`;
+    w.appendChild(row);
+    $('on-' + k).onchange = e => {
+      $('st-' + k).disabled = $('en-' + k).disabled = !e.target.checked;
+    };
+  }
+}
+
+$('saveTemplate').onclick = async () => {
+  const t = {};
+  for (const [k] of DAYS) {
+    t[k] = $('on-' + k).checked ? { start: $('st-' + k).value, end: $('en-' + k).value } : null;
+    if (t[k] && t[k].start >= t[k].end) { flash($('tMsg'), false, `${k}: start must be before end.`); return; }
+  }
+  try {
+    if (!DEMO) await api('/admin/schedule', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template: t }),
+    });
+    TEMPLATE = t;
+    flash($('tMsg'), true, 'Weekly hours saved.');
+  } catch (err) { flash($('tMsg'), false, err.message); }
+};
+
+function renderOverrides(list) {
+  const el = $('ovList');
+  if (!list.length) { el.textContent = 'No upcoming days off.'; return; }
+  el.innerHTML = '';
+  for (const o of list) {
+    const row = document.createElement('div');
+    row.className = 'ovrow';
+    const when = new Date(o.date + 'T12:00:00')
+      .toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+    row.innerHTML = `<span style="flex:1">${when}${o.note ? ` — <span class="muted">${esc(o.note)}</span>` : ''}</span>`;
+    const rm = document.createElement('button');
+    rm.className = 'btn ghost sm'; rm.textContent = 'Reopen';
+    rm.onclick = async () => {
+      try {
+        if (!DEMO) await api('/admin/override', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date: o.date, remove: true }),
+        });
+        flash($('oMsg'), true, o.date + ' reopened.');
+        loadSchedule();
+      } catch (err) { flash($('oMsg'), false, err.message); }
+    };
+    row.appendChild(rm);
+    el.appendChild(row);
+  }
+}
+
+$('addOv').onclick = async () => {
+  const date = $('ovDate').value;
+  if (!date) { flash($('oMsg'), false, 'Pick a date.'); return; }
+  try {
+    if (!DEMO) await api('/admin/override', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, note: $('ovNote').value.trim() }),
+    });
+    flash($('oMsg'), true, date + ' blocked. Existing bookings that day are NOT auto-cancelled — check the bookings tab.');
+    $('ovNote').value = '';
+    loadSchedule();
+  } catch (err) { flash($('oMsg'), false, err.message); }
+};
+
+// --- settings ---
+async function loadSettings() {
+  let c = { name: 'Your Driving School', area: '', phone: '', email: '',
+    prices: { 60: 38, 90: 55, 120: 70 }, notice_hours: 12, horizon_days: 21 };
+  if (!DEMO) {
+    try { c = (await api('/admin/settings')).config; }
+    catch (err) { flash($('sMsg'), false, err.message); }
+  }
+  $('sName').value = c.name; $('sArea').value = c.area;
+  $('sPhone').value = c.phone; $('sEmail').value = c.email;
+  $('p60').value = c.prices[60]; $('p90').value = c.prices[90]; $('p120').value = c.prices[120];
+  $('sNotice').value = c.notice_hours; $('sHorizon').value = c.horizon_days;
+  $('consTitle').textContent = c.name + ' — console';
+}
+
+$('saveSettings').onclick = async () => {
+  const config = {
+    name: $('sName').value.trim(), area: $('sArea').value.trim(),
+    phone: $('sPhone').value.trim(), email: $('sEmail').value.trim(),
+    prices: { 60: parseFloat($('p60').value), 90: parseFloat($('p90').value), 120: parseFloat($('p120').value) },
+    notice_hours: parseInt($('sNotice').value, 10), horizon_days: parseInt($('sHorizon').value, 10),
+  };
+  try {
+    if (!DEMO) await api('/admin/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config }),
+    });
+    flash($('sMsg'), true, 'Settings saved.');
+    $('consTitle').textContent = config.name + ' — console';
+  } catch (err) { flash($('sMsg'), false, err.message); }
+};
+
+// boot
+if (KEY) signIn(KEY).catch(signOut);
+else if (DEMO) { /* show login; any key works in preview */ }
+</script>
+</body>
+</html>

@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Book a Driving Lesson</title>
+<meta name="description" content="Book driving lessons online — see live availability and reserve your slot.">
+<style>
+  :root {
+    color-scheme: light dark;
+    --accent: #1a7a4a;
+    --accent-soft: #e6f4ec;
+    --page: #f7f9f8;
+    --card: #ffffff;
+    --text: #14201a;
+    --muted: #5c6b62;
+    --border: rgba(20,32,26,0.12);
+    --good: #1a7a4a;
+    --bad: #c23b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #3fae77;
+      --accent-soft: #12291d;
+      --page: #0d1411;
+      --card: #16201a;
+      --text: #e8f0eb;
+      --muted: #93a59a;
+      --border: rgba(232,240,235,0.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--text);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 16px 16px 80px; }
+  header.hero {
+    background: var(--accent); color: #fff; border-radius: 14px;
+    padding: 28px 24px; margin-bottom: 20px;
+  }
+  header.hero h1 { margin: 0 0 6px; font-size: 1.7rem; }
+  header.hero p { margin: 0; opacity: .92; }
+  .badges { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    background: rgba(255,255,255,0.16); border-radius: 999px;
+    padding: 4px 12px; font-size: .85rem;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px; margin-bottom: 16px;
+  }
+  .card h2 { margin: 0 0 12px; font-size: 1.15rem; }
+  .prices { display: flex; gap: 10px; flex-wrap: wrap; }
+  .price {
+    flex: 1 1 140px; border: 1.5px solid var(--border); border-radius: 10px;
+    padding: 12px; text-align: center; cursor: pointer; background: none;
+    color: var(--text); font: inherit;
+  }
+  .price.sel { border-color: var(--accent); background: var(--accent-soft); }
+  .price .amt { font-size: 1.3rem; font-weight: 700; display: block; }
+  .price .len { color: var(--muted); font-size: .85rem; }
+  .seg { display: inline-flex; border: 1.5px solid var(--border); border-radius: 999px; overflow: hidden; margin-bottom: 12px; }
+  .seg button {
+    border: 0; background: none; color: var(--text); font: inherit;
+    padding: 7px 18px; cursor: pointer;
+  }
+  .seg button.sel { background: var(--accent); color: #fff; }
+  .days { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; }
+  .day {
+    flex: 0 0 72px; border: 1.5px solid var(--border); border-radius: 10px;
+    padding: 8px 4px; text-align: center; cursor: pointer; background: none;
+    color: var(--text); font: inherit;
+  }
+  .day.sel { border-color: var(--accent); background: var(--accent-soft); }
+  .day.off { opacity: .4; cursor: default; }
+  .day .dow { font-size: .75rem; color: var(--muted); display: block; }
+  .day .dom { font-weight: 700; font-size: 1.05rem; }
+  .day .n { font-size: .7rem; color: var(--good); }
+  .times { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .time {
+    border: 1.5px solid var(--border); border-radius: 8px; padding: 7px 14px;
+    cursor: pointer; background: none; color: var(--text); font: inherit;
+  }
+  .time.sel { border-color: var(--accent); background: var(--accent); color: #fff; }
+  form label { display: block; font-size: .85rem; color: var(--muted); margin: 12px 0 4px; }
+  form input, form textarea {
+    width: 100%; padding: 9px 11px; border: 1.5px solid var(--border);
+    border-radius: 8px; background: var(--page); color: var(--text); font: inherit;
+  }
+  form input:focus, form textarea:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 540px) { .row2 { grid-template-columns: 1fr; } }
+  .btn {
+    display: inline-block; background: var(--accent); color: #fff; border: 0;
+    border-radius: 10px; padding: 12px 26px; font: inherit; font-weight: 600;
+    cursor: pointer; margin-top: 16px;
+  }
+  .btn[disabled] { opacity: .5; cursor: default; }
+  .msg { margin-top: 12px; padding: 10px 14px; border-radius: 8px; display: none; }
+  .msg.err { display: block; background: rgba(194,59,59,.12); color: var(--bad); }
+  .msg.ok { display: block; background: var(--accent-soft); color: var(--good); }
+  .muted { color: var(--muted); font-size: .88rem; }
+  .summary { background: var(--accent-soft); border-radius: 8px; padding: 10px 14px; margin-top: 12px; display: none; }
+  footer { text-align: center; color: var(--muted); font-size: .8rem; margin-top: 30px; }
+  footer a { color: var(--muted); }
+  .demo-note {
+    background: rgba(237,161,0,.14); border-radius: 8px; padding: 8px 12px;
+    font-size: .82rem; margin-bottom: 14px; display: none;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="demo-note" id="demoNote">Preview mode — no backend connected yet; slots shown are samples and bookings aren’t saved.</div>
+
+  <header class="hero">
+    <h1 id="hName">Driving Lessons</h1>
+    <p id="hArea">Loading…</p>
+    <div class="badges">
+      <span class="badge">DVSA-approved instructor</span>
+      <span class="badge" id="bManual">Manual &amp; automatic</span>
+      <span class="badge">Door-to-door pickup</span>
+    </div>
+  </header>
+
+  <div class="card">
+    <h2>1 · Choose your lesson</h2>
+    <div class="seg" id="typeSeg">
+      <button type="button" data-type="manual" class="sel">Manual</button>
+      <button type="button" data-type="automatic">Automatic</button>
+    </div>
+    <div class="prices" id="prices"></div>
+  </div>
+
+  <div class="card">
+    <h2>2 · Pick a slot</h2>
+    <p class="muted" id="horizonNote"></p>
+    <div class="days" id="days"></div>
+    <div class="times" id="times"></div>
+    <div class="summary" id="summary"></div>
+  </div>
+
+  <div class="card">
+    <h2>3 · Your details</h2>
+    <form id="bookForm">
+      <div class="row2">
+        <div><label for="fName">Full name</label><input id="fName" required maxlength="100" autocomplete="name"></div>
+        <div><label for="fEmail">Email</label><input id="fEmail" type="email" required maxlength="200" autocomplete="email"></div>
+      </div>
+      <div class="row2">
+        <div><label for="fPhone">Phone</label><input id="fPhone" type="tel" required autocomplete="tel"></div>
+        <div><label for="fPostcode">Pickup postcode</label><input id="fPostcode" required maxlength="10" placeholder="e.g. LS1 4AB" autocomplete="postal-code"></div>
+      </div>
+      <label for="fNotes">Anything I should know? (optional)</label>
+      <textarea id="fNotes" rows="2" maxlength="500" placeholder="e.g. test booked for September, nervous beginner, prefer quiet roads first"></textarea>
+      <button class="btn" id="submitBtn" type="submit" disabled>Request booking</button>
+      <div class="msg" id="msg"></div>
+      <p class="muted">Your request is sent to the instructor to confirm — you’ll get a reference code straight away and a confirmation by phone or email. No payment is taken online.</p>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Need to cancel?</h2>
+    <form id="cancelForm">
+      <div class="row2">
+        <div><label for="cRef">Booking reference</label><input id="cRef" maxlength="8" placeholder="e.g. K7M2XQ"></div>
+        <div><label for="cEmail">Email used to book</label><input id="cEmail" type="email"></div>
+      </div>
+      <button class="btn" type="submit">Cancel booking</button>
+      <div class="msg" id="cMsg"></div>
+    </form>
+  </div>
+
+  <footer>
+    <span id="fContact"></span>
+    <p><a href="admin.html">Instructor sign-in</a></p>
+  </footer>
+</div>
+
+<script>
+'use strict';
+// Set to your Cloudflare Worker URL once deployed, e.g. 'https://booking.example.com'.
+// Empty string = preview mode with sample data.
+const API_BASE = '';
+
+const $ = id => document.getElementById(id);
+const DEMO = !API_BASE;
+
+let CONFIG = {
+  name: 'Driving Lessons', area: 'Local lessons with door-to-door pickup',
+  phone: '', email: '', prices: { 60: 38, 90: 55, 120: 70 },
+  notice_hours: 12, horizon_days: 21, durations: [60, 90, 120],
+};
+const state = { type: 'manual', duration: 60, date: null, time: null, slots: {} };
+
+function fmtLen(m) { return m === 60 ? '1 hour' : m === 90 ? '1½ hours' : (m / 60) + ' hours'; }
+
+async function api(path, opts) {
+  const r = await fetch(API_BASE + path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'Something went wrong — please try again.');
+  return j;
+}
+
+// --- preview-mode sample data ---
+function demoSlots() {
+  const out = {};
+  const today = new Date();
+  for (let i = 1; i <= 14; i++) {
+    const d = new Date(today); d.setDate(d.getDate() + i);
+    if (d.getDay() === 0) continue; // Sundays off
+    const ds = d.toISOString().slice(0, 10);
+    const times = [];
+    for (let h = 9; h <= 16; h++) if ((h + i) % 3 !== 0) times.push(String(h).padStart(2, '0') + ':00');
+    if (times.length) out[ds] = times;
+  }
+  return out;
+}
+
+async function loadConfig() {
+  if (!DEMO) {
+    try { CONFIG = { ...CONFIG, ...(await api('/api/config')) }; } catch {}
+  } else {
+    $('demoNote').style.display = 'block';
+  }
+  $('hName').textContent = CONFIG.name;
+  $('hArea').textContent = CONFIG.area;
+  $('fContact').textContent = [CONFIG.phone, CONFIG.email].filter(Boolean).join(' · ');
+  $('horizonNote').textContent =
+    `Bookings open up to ${CONFIG.horizon_days} days ahead (minimum ${CONFIG.notice_hours}h notice). All times UK.`;
+  renderPrices();
+}
+
+function renderPrices() {
+  $('prices').innerHTML = '';
+  for (const d of CONFIG.durations) {
+    const p = CONFIG.prices[d];
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'price' + (state.duration === d ? ' sel' : '');
+    b.innerHTML = `<span class="amt">£${p}</span><span class="len">${fmtLen(d)}</span>`;
+    b.onclick = () => { state.duration = d; state.time = null; renderPrices(); loadSlots(); };
+    $('prices').appendChild(b);
+  }
+}
+
+async function loadSlots() {
+  const today = new Date().toISOString().slice(0, 10);
+  const end = new Date(); end.setDate(end.getDate() + CONFIG.horizon_days);
+  if (DEMO) {
+    state.slots = demoSlots();
+  } else {
+    try {
+      const j = await api(`/api/slots?from=${today}&to=${end.toISOString().slice(0, 10)}&duration=${state.duration}`);
+      state.slots = j.slots || {};
+    } catch { state.slots = {}; }
+  }
+  if (!state.slots[state.date]) state.date = null;
+  renderDays();
+}
+
+function renderDays() {
+  const days = $('days'); days.innerHTML = '';
+  const today = new Date();
+  for (let i = 1; i <= CONFIG.horizon_days; i++) {
+    const d = new Date(today); d.setDate(d.getDate() + i);
+    const ds = d.toISOString().slice(0, 10);
+    const n = (state.slots[ds] || []).length;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'day' + (state.date === ds ? ' sel' : '') + (n ? '' : ' off');
+    b.disabled = !n;
+    b.innerHTML = `<span class="dow">${d.toLocaleDateString('en-GB', { weekday: 'short' })}</span>` +
+      `<span class="dom">${d.getDate()}</span>` +
+      `<span class="dow">${d.toLocaleDateString('en-GB', { month: 'short' })}</span>` +
+      (n ? `<span class="n">${n} slots</span>` : `<span class="n">&nbsp;</span>`);
+    b.onclick = () => { state.date = ds; state.time = null; renderDays(); };
+    days.appendChild(b);
+  }
+  renderTimes();
+}
+
+function renderTimes() {
+  const t = $('times'); t.innerHTML = '';
+  if (!state.date) {
+    t.innerHTML = '<span class="muted">Pick a day above to see start times.</span>';
+  } else {
+    for (const time of state.slots[state.date] || []) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'time' + (state.time === time ? ' sel' : '');
+      b.textContent = time;
+      b.onclick = () => { state.time = time; renderTimes(); };
+      t.appendChild(b);
+    }
+  }
+  const s = $('summary');
+  if (state.date && state.time) {
+    const d = new Date(state.date + 'T12:00:00');
+    s.style.display = 'block';
+    s.textContent = `Selected: ${fmtLen(state.duration)} ${state.type} lesson — ` +
+      `${d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })} at ${state.time} · £${CONFIG.prices[state.duration]}`;
+    $('submitBtn').disabled = false;
+  } else {
+    s.style.display = 'none';
+    $('submitBtn').disabled = true;
+  }
+}
+
+$('typeSeg').addEventListener('click', e => {
+  const b = e.target.closest('button[data-type]');
+  if (!b) return;
+  state.type = b.dataset.type;
+  for (const x of $('typeSeg').children) x.classList.toggle('sel', x === b);
+});
+
+$('bookForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const msg = $('msg'); msg.className = 'msg';
+  $('submitBtn').disabled = true;
+  const body = {
+    date: state.date, time: state.time, duration: state.duration, lesson_type: state.type,
+    name: $('fName').value.trim(), email: $('fEmail').value.trim(),
+    phone: $('fPhone').value.trim(), postcode: $('fPostcode').value.trim(),
+    notes: $('fNotes').value.trim(),
+  };
+  try {
+    let ref;
+    if (DEMO) {
+      ref = 'DEMO' + Math.floor(Math.random() * 90 + 10);
+    } else {
+      ref = (await api('/api/book', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      })).ref;
+    }
+    msg.className = 'msg ok';
+    msg.textContent = `Request sent! Your reference is ${ref} — keep it to cancel or change the lesson. ` +
+      `The instructor will confirm shortly.`;
+    $('bookForm').reset();
+    state.time = null;
+    loadSlots();
+  } catch (err) {
+    msg.className = 'msg err';
+    msg.textContent = err.message;
+    $('submitBtn').disabled = false;
+    if (String(err.message).includes('no longer available')) loadSlots();
+  }
+});
+
+$('cancelForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const m = $('cMsg'); m.className = 'msg';
+  const ref = $('cRef').value.trim(), email = $('cEmail').value.trim();
+  if (!ref || !email) { m.className = 'msg err'; m.textContent = 'Enter both your reference and email.'; return; }
+  try {
+    if (!DEMO) await api('/api/cancel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref, email }),
+    });
+    m.className = 'msg ok';
+    m.textContent = 'If that booking exists, it has been cancelled. You’ll get a confirmation if so.';
+    $('cancelForm').reset();
+  } catch (err) { m.className = 'msg err'; m.textContent = err.message; }
+});
+
+loadConfig().then(loadSlots);
+</script>
+</body>
+</html>
