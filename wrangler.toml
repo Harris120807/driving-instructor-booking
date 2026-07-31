@@ -1,0 +1,16 @@
+# Cloudflare Worker config — deploy with: npx wrangler deploy
+# The Worker serves the API; the pages in public/ ship as static assets on the
+# same origin (requests that don't match an asset fall through to the Worker).
+
+name = "driving-booking"
+main = "worker/worker.js"
+compatibility_date = "2025-06-01"
+
+[assets]
+directory = "public"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "driving-booking"
+# Filled in after `npx wrangler d1 create driving-booking`
+database_id = "REPLACE_WITH_D1_DATABASE_ID"

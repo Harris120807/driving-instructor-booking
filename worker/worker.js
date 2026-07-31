@@ -1,13 +1,14 @@
 /**
  * Driving instructor booking site — Cloudflare Worker API.
+ * Static pages (public/) are served by the Worker's assets binding; anything
+ * that isn't an asset lands here.
  *
- * Bindings:
- *   DB        - D1 database (schema.sql)
- * Secrets:
- *   ADMIN_KEY  - bearer key for the /admin/* routes (instructor's console)
- *   NTFY_TOPIC - optional ntfy.sh topic; new-booking pushes go here if set
+ * Bindings:  DB (D1, schema.sql)
+ * Secrets:   ADMIN_KEY  - bearer key for /admin/* (instructor's console)
+ *            NTFY_TOPIC - optional ntfy.sh topic for instructor pushes
  *
  * All responses are JSON with CORS *; times are UK wall-clock (Europe/London).
+ * Manual-transmission lessons only (owner decision 2026-07-31).
  */
 
 const CORS = {
@@ -21,9 +22,11 @@ const DEFAULT_CONFIG = {
   area: 'Your town and surrounding areas',
   phone: '',
   email: '',
-  prices: { 60: 38, 90: 55, 120: 70 }, // £ per lesson length (minutes)
-  notice_hours: 12,   // minimum notice before a slot can be booked
-  horizon_days: 21,   // how far ahead pupils can book
+  prices: { 60: 44, 90: 66, 120: 88 }, // £ per lesson length (minutes)
+  notice_hours: 12,        // minimum notice to BOOK a slot
+  cancel_notice_hours: 24, // cancelling closer than this to the lesson incurs the fee
+  late_cancel_fee: 44,     // £ owed for a late cancellation
+  horizon_days: 21,        // how far ahead pupils can book
 };
 
 const DEFAULT_TEMPLATE = {
@@ -38,7 +41,8 @@ const DEFAULT_TEMPLATE = {
 
 const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const DURATIONS = [60, 90, 120];
-const SLOT_STEP_MIN = 30; // start-time grid
+const SLOT_STEP_MIN = 30;   // start-time grid
+const MAX_REPEAT_WEEKS = 12;
 
 function json(data, status = 200, extra = {}) {
   return new Response(JSON.stringify(data), {
@@ -79,7 +83,6 @@ function ukNowParts() {
 }
 
 function isoDayKey(dateStr) {
-  // Day-of-week for a YYYY-MM-DD (UTC parse is fine — date-only)
   return DAY_KEYS[new Date(dateStr + 'T12:00:00Z').getUTCDay()];
 }
 
@@ -89,8 +92,17 @@ function addDays(dateStr, n) {
   return d.toISOString().slice(0, 10);
 }
 
+function daysBetween(a, b) {
+  return Math.round((new Date(b + 'T12:00:00Z') - new Date(a + 'T12:00:00Z')) / 86400000);
+}
+
 const toMin = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
 const toHM = m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+// Minutes from now (UK) until a lesson starts; negative = already started/past
+function minsUntil(now, date, time) {
+  return daysBetween(now.date, date) * 1440 + toMin(time) - now.minutes;
+}
 
 // --- settings --------------------------------------------------------------
 
@@ -108,20 +120,33 @@ async function putSetting(env, key, obj) {
 
 // --- slot computation ------------------------------------------------------
 
-async function openSlots(env, from, to, durationMin) {
+async function blockedDates(env, from, to) {
+  const set = new Set();
+  const { results } = await env.DB.prepare(
+    'SELECT start_date, end_date FROM overrides WHERE start_date <= ? AND end_date >= ?'
+  ).bind(to, from).all();
+  for (const r of results) {
+    const s = r.start_date < from ? from : r.start_date;
+    const e = r.end_date > to ? to : r.end_date;
+    for (let d = s; d <= e; d = addDays(d, 1)) set.add(d);
+  }
+  return set;
+}
+
+// opts.noHorizon: used for recurring weeks beyond the public booking horizon
+async function openSlots(env, from, to, durationMin, opts = {}) {
   const config = await getSetting(env, 'config', DEFAULT_CONFIG);
   const template = await getSetting(env, 'template', DEFAULT_TEMPLATE);
   const now = ukNowParts();
 
-  const horizonEnd = addDays(now.date, config.horizon_days);
   if (from < now.date) from = now.date;
-  if (to > horizonEnd) to = horizonEnd;
+  if (!opts.noHorizon) {
+    const horizonEnd = addDays(now.date, config.horizon_days);
+    if (to > horizonEnd) to = horizonEnd;
+  }
   if (from > to) return {};
 
-  const overrides = {};
-  for (const r of (await env.DB.prepare(
-    'SELECT date, closed FROM overrides WHERE date >= ? AND date <= ?'
-  ).bind(from, to).all()).results) overrides[r.date] = r;
+  const blocked = await blockedDates(env, from, to);
 
   const busy = {}; // date -> [{start, end}] minutes
   for (const r of (await env.DB.prepare(
@@ -132,11 +157,11 @@ async function openSlots(env, from, to, durationMin) {
 
   const out = {};
   for (let d = from; d <= to; d = addDays(d, 1)) {
-    if (overrides[d]?.closed) continue;
+    if (blocked.has(d)) continue;
     const day = template[isoDayKey(d)];
     if (!day) continue;
     const open = toMin(day.start), close = toMin(day.end);
-    // Earliest bookable start on this date: (now + notice window) projected
+    // Earliest bookable start on this date: (now + booking notice) projected
     // into day-of-date minutes; 0 once the date is far enough out
     const noticeCutoff = Math.max(0,
       now.minutes + config.notice_hours * 60 - daysBetween(now.date, d) * 1440);
@@ -150,10 +175,6 @@ async function openSlots(env, from, to, durationMin) {
     if (slots.length) out[d] = slots;
   }
   return out;
-}
-
-function daysBetween(a, b) {
-  return Math.round((new Date(b + 'T12:00:00Z') - new Date(a + 'T12:00:00Z')) / 86400000);
 }
 
 // --- rate limiting ---------------------------------------------------------
@@ -178,6 +199,24 @@ function notify(env, ctx, title, body) {
   }).catch(() => {}));
 }
 
+// --- money -----------------------------------------------------------------
+
+function lessonPast(now, b) {
+  return minsUntil(now, b.date, b.time) <= 0;
+}
+
+// What this booking currently adds to the pupil's "money owed"
+function owedOf(now, b) {
+  if (b.paid) return 0;
+  if (b.status === 'cancelled') return b.cancelled_by === 'student' ? (b.fee || 0) : 0;
+  if (b.status === 'confirmed' && lessonPast(now, b)) return b.price;
+  return 0; // upcoming, or pending lessons that never got confirmed
+}
+
+function upcomingCostOf(now, b) {
+  return (b.status !== 'cancelled' && !lessonPast(now, b)) ? b.price : 0;
+}
+
 // --- validation ------------------------------------------------------------
 
 const RE_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -194,6 +233,12 @@ function newRef() {
   return r;
 }
 
+const publicLesson = b => ({
+  ref: b.ref, series: b.series, date: b.date, time: b.time,
+  duration_min: b.duration_min, price: b.price, status: b.status,
+  cancelled_by: b.cancelled_by, fee: b.fee, paid: !!b.paid,
+});
+
 // --- routes ----------------------------------------------------------------
 
 export default {
@@ -205,11 +250,12 @@ export default {
     try {
       // ---- public ----
       if (path === '/api/config' && req.method === 'GET') {
-        const config = await getSetting(env, 'config', DEFAULT_CONFIG);
+        const c = await getSetting(env, 'config', DEFAULT_CONFIG);
         return json({
-          name: config.name, area: config.area, phone: config.phone, email: config.email,
-          prices: config.prices, notice_hours: config.notice_hours,
-          horizon_days: config.horizon_days, durations: DURATIONS,
+          name: c.name, area: c.area, phone: c.phone, email: c.email,
+          prices: c.prices, notice_hours: c.notice_hours,
+          cancel_notice_hours: c.cancel_notice_hours, late_cancel_fee: c.late_cancel_fee,
+          horizon_days: c.horizon_days, durations: DURATIONS, max_repeat_weeks: MAX_REPEAT_WEEKS,
         }, 200, { 'Cache-Control': 'public, max-age=300' });
       }
 
@@ -230,47 +276,105 @@ export default {
 
         const b = await readBody(req);
         if (!b) return json({ error: 'bad request' }, 400);
-        const { date, time, duration, lesson_type, name, email, phone, postcode } = b;
+        const { date, time, duration } = b;
         const notes = String(b.notes || '').slice(0, 500);
+        const repeatWeeks = Math.min(MAX_REPEAT_WEEKS, Math.max(1, parseInt(b.repeat_weeks, 10) || 1));
 
         if (!RE_DATE.test(date || '') || !RE_TIME.test(time || '')) return json({ error: 'Invalid slot.' }, 400);
         if (!DURATIONS.includes(duration)) return json({ error: 'Invalid duration.' }, 400);
-        if (!['manual', 'automatic'].includes(lesson_type)) return json({ error: 'Invalid lesson type.' }, 400);
-        if (!name || String(name).trim().length < 2 || String(name).length > 100) return json({ error: 'Please give your name.' }, 400);
-        if (!RE_EMAIL.test(email || '') || String(email).length > 200) return json({ error: 'Please give a valid email.' }, 400);
-        if (!RE_PHONE.test(phone || '')) return json({ error: 'Please give a valid phone number.' }, 400);
-        if (!RE_UK_POSTCODE.test(postcode || '')) return json({ error: 'Please give a valid UK pickup postcode.' }, 400);
+        if (!b.name || String(b.name).trim().length < 2 || String(b.name).length > 100) return json({ error: 'Please give your name.' }, 400);
+        if (!RE_EMAIL.test(b.email || '') || String(b.email).length > 200) return json({ error: 'Please give a valid email.' }, 400);
+        if (!RE_PHONE.test(b.phone || '')) return json({ error: 'Please give a valid phone number.' }, 400);
+        if (!RE_UK_POSTCODE.test(b.postcode || '')) return json({ error: 'Please give a valid UK pickup postcode.' }, 400);
 
-        // Re-check the slot is genuinely open (also enforces notice + horizon)
+        // First lesson must be a genuinely open slot (notice + horizon enforced)
         const open = await openSlots(env, date, date, duration);
         if (!(open[date] || []).includes(time))
           return json({ error: 'That slot is no longer available — please pick another.' }, 409);
 
-        const ref = newRef();
-        await env.DB.prepare(
-          `INSERT INTO bookings (ref, date, time, duration_min, lesson_type, name, email, phone, postcode, notes, status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
-        ).bind(ref, date, time, duration, lesson_type, String(name).trim(), String(email).trim(),
-          String(phone).trim(), String(postcode).trim().toUpperCase(), notes,
-          Math.floor(Date.now() / 1000)).run();
+        const config = await getSetting(env, 'config', DEFAULT_CONFIG);
+        const price = config.prices[duration];
+        const name = String(b.name).trim(), email = String(b.email).trim().toLowerCase();
+        const phone = String(b.phone).trim(), postcode = String(b.postcode).trim().toUpperCase();
+        const series = repeatWeeks > 1 ? newRef() : null;
+        const nowSec = Math.floor(Date.now() / 1000);
 
-        notify(env, ctx, 'New lesson request',
-          `${date} ${time} (${duration} min, ${lesson_type})\n${String(name).trim()} — ${postcode.toUpperCase()}\nRef ${ref}`);
-        return json({ ok: true, ref, status: 'pending' });
+        const booked = [], skipped = [];
+        for (let w = 0; w < repeatWeeks; w++) {
+          const d = addDays(date, w * 7);
+          if (w > 0) {
+            // Later weeks: same checks minus the horizon (that's the point of recurring)
+            const openW = await openSlots(env, d, d, duration, { noHorizon: true });
+            if (!(openW[d] || []).includes(time)) { skipped.push(d); continue; }
+          }
+          const ref = newRef();
+          await env.DB.prepare(
+            `INSERT INTO bookings (ref, series, date, time, duration_min, price, name, email, phone, postcode, notes, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
+          ).bind(ref, series, d, time, duration, price, name, email, phone, postcode, notes, nowSec).run();
+          booked.push({ date: d, ref });
+        }
+
+        notify(env, ctx, repeatWeeks > 1 ? `New weekly lesson request (${booked.length}×)` : 'New lesson request',
+          `${date} ${time} (${duration} min${repeatWeeks > 1 ? `, weekly ×${booked.length}` : ''})\n` +
+          `${name} — ${postcode}\nRef ${booked[0].ref}${skipped.length ? `\nSkipped (unavailable): ${skipped.join(', ')}` : ''}`);
+
+        return json({
+          ok: true, ref: booked[0].ref, series, status: 'pending',
+          booked, skipped, price_each: price, total: price * booked.length,
+        });
+      }
+
+      // Pupil portal: authenticated by email + any one of their booking refs
+      if (path === '/api/my-lessons' && req.method === 'POST') {
+        const ip = req.headers.get('CF-Connecting-IP') || 'unknown';
+        if (await rateLimited(env, `portal:${ip}`, 30, 3600))
+          return json({ error: 'Too many attempts — please try again later.' }, 429);
+        const b = await readBody(req);
+        const email = String(b?.email || '').trim().toLowerCase();
+        const ref = String(b?.ref || '').trim().toUpperCase();
+        if (!RE_EMAIL.test(email) || !ref) return json({ error: 'bad request' }, 400);
+        const match = await env.DB.prepare(
+          'SELECT id, name FROM bookings WHERE ref = ? AND email = ?').bind(ref, email).first();
+        if (!match) return json({ error: 'No booking found for that reference and email.' }, 404);
+
+        const rows = (await env.DB.prepare(
+          'SELECT * FROM bookings WHERE email = ? ORDER BY date, time').bind(email).all()).results;
+        const now = ukNowParts();
+        const config = await getSetting(env, 'config', DEFAULT_CONFIG);
+        let owed = 0, upcoming = 0;
+        const lessons = rows.map(r => {
+          owed += owedOf(now, r);
+          upcoming += upcomingCostOf(now, r);
+          return { ...publicLesson(r), past: lessonPast(now, r) };
+        });
+        return json({
+          name: match.name, lessons, owed, upcoming_cost: upcoming,
+          cancel_notice_hours: config.cancel_notice_hours, late_cancel_fee: config.late_cancel_fee,
+        });
       }
 
       if (path === '/api/cancel' && req.method === 'POST') {
         const b = await readBody(req);
-        if (!b || !b.ref || !RE_EMAIL.test(b.email || '')) return json({ error: 'bad request' }, 400);
+        const email = String(b?.email || '').trim().toLowerCase();
+        const ref = String(b?.ref || '').trim().toUpperCase();
+        if (!RE_EMAIL.test(email) || !ref) return json({ error: 'bad request' }, 400);
         const row = await env.DB.prepare(
-          "SELECT id, status FROM bookings WHERE ref = ? AND lower(email) = lower(?)"
-        ).bind(String(b.ref).trim().toUpperCase(), String(b.email).trim()).first();
-        // Same answer whether or not the ref exists — no probing
-        if (row && row.status !== 'cancelled') {
-          await env.DB.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").bind(row.id).run();
-          notify(env, ctx, 'Booking cancelled by pupil', `Ref ${String(b.ref).trim().toUpperCase()}`);
-        }
-        return json({ ok: true });
+          'SELECT * FROM bookings WHERE ref = ? AND email = ?').bind(ref, email).first();
+        if (!row) return json({ error: 'No booking found for that reference and email.' }, 404);
+        if (row.status === 'cancelled') return json({ error: 'That lesson is already cancelled.' }, 409);
+        const now = ukNowParts();
+        if (lessonPast(now, row)) return json({ error: 'That lesson has already taken place.' }, 409);
+
+        const config = await getSetting(env, 'config', DEFAULT_CONFIG);
+        const late = minsUntil(now, row.date, row.time) < config.cancel_notice_hours * 60;
+        const fee = late ? config.late_cancel_fee : 0;
+        await env.DB.prepare(
+          "UPDATE bookings SET status = 'cancelled', cancelled_by = 'student', fee = ?, paid = 0 WHERE id = ?"
+        ).bind(fee, row.id).run();
+        notify(env, ctx, late ? 'Late cancellation by pupil' : 'Booking cancelled by pupil',
+          `${row.date} ${row.time} — ${row.name}\nRef ${ref}${late ? `\nLate-cancel fee £${fee} added` : ''}`);
+        return json({ ok: true, late, fee });
       }
 
       // ---- admin ----
@@ -289,15 +393,64 @@ export default {
           const b = await readBody(req);
           if (!b || !Number.isInteger(b.id) || !['confirmed', 'cancelled', 'pending'].includes(b.action))
             return json({ error: 'bad request' }, 400);
-          await env.DB.prepare('UPDATE bookings SET status = ? WHERE id = ?').bind(b.action, b.id).run();
+          if (b.action === 'cancelled') {
+            // Instructor cancellations never carry a pupil fee
+            await env.DB.prepare(
+              "UPDATE bookings SET status = 'cancelled', cancelled_by = 'instructor', fee = 0 WHERE id = ?"
+            ).bind(b.id).run();
+          } else {
+            await env.DB.prepare(
+              'UPDATE bookings SET status = ?, cancelled_by = NULL, fee = 0 WHERE id = ?'
+            ).bind(b.action, b.id).run();
+          }
           return json({ ok: true });
+        }
+
+        if (path === '/admin/paid' && req.method === 'POST') {
+          const b = await readBody(req);
+          if (!b || !Number.isInteger(b.id) || ![0, 1].includes(b.paid)) return json({ error: 'bad request' }, 400);
+          await env.DB.prepare('UPDATE bookings SET paid = ? WHERE id = ?').bind(b.paid, b.id).run();
+          return json({ ok: true });
+        }
+
+        if (path === '/admin/students' && req.method === 'GET') {
+          const rows = (await env.DB.prepare('SELECT * FROM bookings ORDER BY created_at').all()).results;
+          const now = ukNowParts();
+          const map = new Map();
+          for (const r of rows) {
+            const s = map.get(r.email) || {
+              email: r.email, name: r.name, phone: r.phone, postcode: r.postcode,
+              lessons: 0, upcoming: 0, cancelled: 0, owed: 0, upcoming_cost: 0,
+            };
+            // Latest booking wins for contact details
+            s.name = r.name; s.phone = r.phone; s.postcode = r.postcode;
+            if (r.status !== 'cancelled') {
+              s.lessons++;
+              if (!lessonPast(now, r)) { s.upcoming++; s.upcoming_cost += r.price; }
+            } else s.cancelled++;
+            s.owed += owedOf(now, r);
+            map.set(r.email, s);
+          }
+          const students = [...map.values()].sort((a, b2) => b2.owed - a.owed || a.name.localeCompare(b2.name));
+          return json({ students });
+        }
+
+        if (path === '/admin/student' && req.method === 'GET') {
+          const email = String(url.searchParams.get('email') || '').trim().toLowerCase();
+          if (!RE_EMAIL.test(email)) return json({ error: 'bad request' }, 400);
+          const rows = (await env.DB.prepare(
+            'SELECT * FROM bookings WHERE email = ? ORDER BY date DESC, time DESC').bind(email).all()).results;
+          const now = ukNowParts();
+          return json({
+            lessons: rows.map(r => ({ ...r, past: lessonPast(now, r), owed_now: owedOf(now, r) })),
+          });
         }
 
         if (path === '/admin/schedule' && req.method === 'GET') {
           return json({
             template: await getSetting(env, 'template', DEFAULT_TEMPLATE),
             overrides: (await env.DB.prepare(
-              "SELECT * FROM overrides WHERE date >= date('now') ORDER BY date LIMIT 200").all()).results,
+              "SELECT * FROM overrides WHERE end_date >= date('now') ORDER BY start_date LIMIT 200").all()).results,
           });
         }
 
@@ -318,15 +471,32 @@ export default {
 
         if (path === '/admin/override' && req.method === 'POST') {
           const b = await readBody(req);
-          if (!b || !RE_DATE.test(b.date || '')) return json({ error: 'bad request' }, 400);
+          if (!b) return json({ error: 'bad request' }, 400);
           if (b.remove) {
-            await env.DB.prepare('DELETE FROM overrides WHERE date = ?').bind(b.date).run();
-          } else {
-            await env.DB.prepare(
-              'INSERT INTO overrides (date, closed, note) VALUES (?, 1, ?) ON CONFLICT(date) DO UPDATE SET note = excluded.note'
-            ).bind(b.date, String(b.note || '').slice(0, 200)).run();
+            if (!Number.isInteger(b.id)) return json({ error: 'bad request' }, 400);
+            await env.DB.prepare('DELETE FROM overrides WHERE id = ?').bind(b.id).run();
+            return json({ ok: true });
           }
-          return json({ ok: true });
+          const start = b.start_date, end = b.end_date || b.start_date;
+          if (!RE_DATE.test(start || '') || !RE_DATE.test(end || '') || end < start)
+            return json({ error: 'bad dates' }, 400);
+          await env.DB.prepare(
+            'INSERT INTO overrides (start_date, end_date, note) VALUES (?, ?, ?)'
+          ).bind(start, end, String(b.note || '').slice(0, 200)).run();
+
+          // Auto-cancel lessons inside the blocked window (no pupil fee) and
+          // report them so the instructor can tell the pupils
+          const hit = (await env.DB.prepare(
+            "SELECT id, ref, date, time, name, phone, email FROM bookings WHERE date >= ? AND date <= ? AND status != 'cancelled' ORDER BY date, time"
+          ).bind(start, end).all()).results;
+          if (hit.length) {
+            await env.DB.prepare(
+              "UPDATE bookings SET status = 'cancelled', cancelled_by = 'instructor', fee = 0 WHERE date >= ? AND date <= ? AND status != 'cancelled'"
+            ).bind(start, end).run();
+            notify(env, ctx, `Time off blocked — ${hit.length} lesson(s) auto-cancelled`,
+              hit.map(h => `${h.date} ${h.time} ${h.name} (${h.phone})`).join('\n'));
+          }
+          return json({ ok: true, cancelled: hit });
         }
 
         if (path === '/admin/settings' && req.method === 'GET') {
@@ -337,19 +507,22 @@ export default {
           const b = await readBody(req);
           if (!b || typeof b.config !== 'object') return json({ error: 'bad request' }, 400);
           const c = b.config;
+          const num = (v, lo, hi, dflt) => {
+            const n = parseFloat(v);
+            return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
+          };
           const clean = {
             name: String(c.name || DEFAULT_CONFIG.name).slice(0, 100),
             area: String(c.area || '').slice(0, 200),
             phone: String(c.phone || '').slice(0, 30),
             email: RE_EMAIL.test(c.email || '') ? c.email : '',
             prices: {},
-            notice_hours: Math.min(72, Math.max(0, parseInt(c.notice_hours, 10) || DEFAULT_CONFIG.notice_hours)),
-            horizon_days: Math.min(90, Math.max(1, parseInt(c.horizon_days, 10) || DEFAULT_CONFIG.horizon_days)),
+            notice_hours: num(c.notice_hours, 0, 72, DEFAULT_CONFIG.notice_hours),
+            cancel_notice_hours: num(c.cancel_notice_hours, 0, 168, DEFAULT_CONFIG.cancel_notice_hours),
+            late_cancel_fee: num(c.late_cancel_fee, 0, 500, DEFAULT_CONFIG.late_cancel_fee),
+            horizon_days: Math.round(num(c.horizon_days, 1, 90, DEFAULT_CONFIG.horizon_days)),
           };
-          for (const d of DURATIONS) {
-            const p = parseFloat(c.prices?.[d]);
-            clean.prices[d] = Number.isFinite(p) && p >= 0 ? p : DEFAULT_CONFIG.prices[d];
-          }
+          for (const d of DURATIONS) clean.prices[d] = num(c.prices?.[d], 0, 1000, DEFAULT_CONFIG.prices[d]);
           await putSetting(env, 'config', clean);
           return json({ ok: true });
         }

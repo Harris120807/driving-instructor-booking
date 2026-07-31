@@ -1,57 +1,76 @@
 # Driving Instructor Booking Site
 
-A booking site for a UK driving instructor: pupils see live availability and
-request lessons; the instructor manages everything from a key-gated admin
-console. Same stack pattern as ValueTally: static pages + a Cloudflare Worker
-API + D1.
+A booking site for a UK driving instructor (manual tuition only): pupils see
+live availability, request one-off or weekly-recurring lessons, track what
+they owe, and cancel with clear fee rules; the instructor manages bookings,
+pupils' accounts, availability and prices from a key-gated console.
 
-## What's here
+Stack: Cloudflare Worker (serves both the static pages and the JSON API on
+one origin) + D1.
 
-| File | What it is |
+## Layout
+
+| Path | What it is |
 |---|---|
-| `index.html` | Public booking page — lesson type/length picker with prices, 3-week availability calendar, booking form (name/email/phone/pickup postcode), self-service cancel by reference + email. |
-| `admin.html` | Instructor console (Bearer admin key, sessionStorage) — bookings list with confirm/cancel, weekly-hours editor, days-off/holiday blocker, business settings (name, area, prices, notice/horizon rules). |
-| `worker/worker.js` | Cloudflare Worker API — public `/api/config`, `/api/slots`, `/api/book`, `/api/cancel`; admin `/admin/bookings`, `/admin/booking`, `/admin/schedule`, `/admin/override`, `/admin/settings`. |
-| `worker/schema.sql` | D1 schema: `settings`, `bookings`, `overrides`, `attempts` (rate limiting). |
+| `public/index.html` | Public booking page — price/length picker, availability calendar, booking form (with "repeat weekly for 4/8/12 weeks"), and the **My lessons** pupil portal (sign in with email + any booking ref: money owed, upcoming lesson costs, past/future lessons with per-lesson cancel). |
+| `public/admin.html` | Instructor console — 4 tabs: **Bookings** (confirm/cancel), **Students** (per-pupil accounts: lessons, money owed, mark paid), **Availability** (weekly hours + time-off date ranges with auto-cancel), **Settings** (prices, booking-notice vs cancellation-notice, late fee, horizon). |
+| `worker/worker.js` | The Worker: public `/api/config`, `/api/slots`, `/api/book`, `/api/my-lessons`, `/api/cancel`; admin `/admin/bookings`, `/admin/booking`, `/admin/paid`, `/admin/students`, `/admin/student`, `/admin/schedule`, `/admin/override`, `/admin/settings`. |
+| `worker/schema.sql` | D1 schema: `settings`, `bookings` (price/paid/fee/cancelled_by/series), `overrides` (date ranges), `attempts`. |
+| `wrangler.toml` | Worker + assets + D1 binding config. |
 
-## Design decisions
+## Business rules (the contract — keep code and copy in sync)
 
-- **Times are UK wall-clock** (Europe/London) throughout — stored as
-  `YYYY-MM-DD` + `HH:MM` strings, never UTC-converted, so DST can't shift a
-  lesson. The Worker derives "now" via `Intl` in Europe/London.
-- **Booking flow is request → confirm**: a booking lands as `pending` and the
-  instructor confirms or declines from the console. No online payment.
-- **Slots are computed, not stored**: weekly template (per-day start/end)
-  minus date overrides (days off) minus non-cancelled bookings, on a 30-min
-  start grid, for 60/90/120-min lessons with proper overlap checks. Booking
-  re-validates the slot server-side (409 if taken meanwhile).
-- **Rules enforced server-side**: minimum notice (default 12 h), booking
-  horizon (default 21 days), 5 booking attempts/hour/IP, UK postcode +
-  email + phone validation. Cancel-by-ref answers identically whether or not
-  the ref exists (no probing).
-- **Admin auth** = single `ADMIN_KEY` Worker secret, SHA-256-compared, sent
-  as a Bearer header from the console (kept in sessionStorage only).
-- **New-booking notifications** go to an optional `NTFY_TOPIC` secret — use a
-  NEW ntfy topic for this project, never the ValueTally pipeline topics.
-- **Preview mode**: with `API_BASE = ''` (as committed), both pages run on
-  sample data with a visible banner, so the whole UI can be reviewed before
-  any backend exists. Booking refs are one-shot codes (no ambiguous chars).
+- **Times are UK wall-clock** (Europe/London), stored as `YYYY-MM-DD` + `HH:MM`
+  strings, never UTC-converted. The Worker derives "now" via `Intl`.
+- **Two separate notice windows**, deliberately distinct in the UI:
+  - `notice_hours` — minimum notice to **book** (how soon a slot can start).
+  - `cancel_notice_hours` — minimum notice to **cancel without charge**.
+    A pupil cancelling inside this window owes `late_cancel_fee` (£).
+    The popup wording on the pupil side states which side of the window
+    they're on *before* they confirm; the server computes the fee
+    authoritatively on `/api/cancel`.
+- **Instructor cancellations never charge the pupil** (`cancelled_by:
+  'instructor'`, fee 0) — including the auto-cancels when time off is blocked.
+- **Blocking time off** takes a start/end date range; all non-cancelled
+  lessons inside are auto-cancelled and returned to the console so the
+  instructor can contact the pupils (also pushed via ntfy if configured).
+  Reopening a period does NOT restore auto-cancelled lessons.
+- **Money owed** per pupil = past **confirmed** unpaid lessons (price) +
+  unpaid **student** late-cancel fees. Pending lessons that were never
+  confirmed cost nothing. `paid` on a cancelled booking means the fee is
+  settled. Upcoming cost = all future non-cancelled lessons.
+- **Recurring bookings**: `repeat_weeks` ∈ {1,4,8,12} (server cap 12). The
+  first lesson must pass normal booking rules (notice + horizon); later weeks
+  skip the horizon check (that's the point) but still respect availability —
+  unavailable weeks are skipped and reported back. All lessons in a series
+  share a `series` id but have individual refs and cancel individually.
+- **Pupil portal auth** = email + any one of their booking refs (refs are
+  6-char unguessable codes). Rate-limited 30/h/IP; booking is 5/h/IP.
+- Slots are computed (weekly template − blocked ranges − bookings) on a
+  30-min grid for 60/90/120-min lessons with overlap checks; `/api/book`
+  re-validates server-side (409 if taken).
+- **Manual-transmission only** (owner decision 2026-07-31) — no lesson-type
+  field anywhere.
 
-## Deployment (not yet provisioned — needs owner go-ahead)
+## Deploy (owner's Cloudflare account)
 
-1. **D1**: create a database, apply `worker/schema.sql`.
-2. **Worker**: deploy `worker/worker.js` with binding `DB` → the database,
-   secrets `ADMIN_KEY` (generate a long random one, hand to the instructor)
-   and optionally `NTFY_TOPIC` (a fresh topic for the instructor's phone).
-3. **Pages**: host `index.html` + `admin.html` anywhere static (GitHub Pages
-   works); set `API_BASE` in BOTH files to the Worker URL.
-4. First run: open `admin.html`, sign in, set business details, prices and
-   weekly hours in Settings/Availability.
+```bash
+export CLOUDFLARE_API_TOKEN=...   # scoped: Workers Scripts:Edit + D1:Edit
+npx wrangler d1 create driving-booking          # put the id in wrangler.toml
+npx wrangler d1 execute driving-booking --remote --file=worker/schema.sql
+npx wrangler deploy
+npx wrangler secret put ADMIN_KEY               # long random; hand to instructor
+npx wrangler secret put NTFY_TOPIC              # optional, a NEW topic
+```
 
-## Contracts to keep in sync
+The site is then live at the workers.dev URL (custom domain can be added on
+the Worker later). Both pages auto-detect a missing backend and fall into a
+sample-data preview mode — that's what you see when opening the HTML files
+directly.
 
-- Slot/booking JSON shapes between `worker.js` and both pages.
-- `DURATIONS` (60/90/120) and `SLOT_STEP_MIN` (30) exist in the Worker;
-  prices per duration live in the `config` settings row.
-- The weekly template shape `{mon: {start, end} | null, ...}` is shared by
-  `worker.js`, `admin.html`, and `schema.sql`'s comment.
+## Ownership / handover notes
+
+- Owner (Harris) hosts and holds the Cloudflare account + repo; the
+  instructor gets the ADMIN_KEY only. Everything is portable: redeploy =
+  this repo + `wrangler d1 export` of the data. Domain (if/when bought)
+  should be registered in the instructor's name.

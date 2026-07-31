@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Book a Driving Lesson</title>
-<meta name="description" content="Book driving lessons online — see live availability and reserve your slot.">
+<meta name="description" content="Book manual driving lessons online — see live availability and reserve your slot.">
 <style>
   :root {
     color-scheme: light dark;
@@ -17,16 +17,12 @@
     --border: rgba(20,32,26,0.12);
     --good: #1a7a4a;
     --bad: #c23b3b;
+    --warn: #b07d10;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --accent: #3fae77;
-      --accent-soft: #12291d;
-      --page: #0d1411;
-      --card: #16201a;
-      --text: #e8f0eb;
-      --muted: #93a59a;
-      --border: rgba(232,240,235,0.14);
+      --accent: #3fae77; --accent-soft: #12291d; --page: #0d1411; --card: #16201a;
+      --text: #e8f0eb; --muted: #93a59a; --border: rgba(232,240,235,0.14); --warn: #e0a92e;
     }
   }
   * { box-sizing: border-box; }
@@ -60,12 +56,6 @@
   .price.sel { border-color: var(--accent); background: var(--accent-soft); }
   .price .amt { font-size: 1.3rem; font-weight: 700; display: block; }
   .price .len { color: var(--muted); font-size: .85rem; }
-  .seg { display: inline-flex; border: 1.5px solid var(--border); border-radius: 999px; overflow: hidden; margin-bottom: 12px; }
-  .seg button {
-    border: 0; background: none; color: var(--text); font: inherit;
-    padding: 7px 18px; cursor: pointer;
-  }
-  .seg button.sel { background: var(--accent); color: #fff; }
   .days { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; }
   .day {
     flex: 0 0 72px; border: 1.5px solid var(--border); border-radius: 10px;
@@ -83,12 +73,12 @@
     cursor: pointer; background: none; color: var(--text); font: inherit;
   }
   .time.sel { border-color: var(--accent); background: var(--accent); color: #fff; }
-  form label { display: block; font-size: .85rem; color: var(--muted); margin: 12px 0 4px; }
-  form input, form textarea {
+  form label, .field label { display: block; font-size: .85rem; color: var(--muted); margin: 12px 0 4px; }
+  input, textarea, select {
     width: 100%; padding: 9px 11px; border: 1.5px solid var(--border);
     border-radius: 8px; background: var(--page); color: var(--text); font: inherit;
   }
-  form input:focus, form textarea:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); border-color: transparent; }
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   @media (max-width: 540px) { .row2 { grid-template-columns: 1fr; } }
   .btn {
@@ -97,9 +87,12 @@
     cursor: pointer; margin-top: 16px;
   }
   .btn[disabled] { opacity: .5; cursor: default; }
+  .btn.sm { padding: 6px 14px; font-size: .85rem; margin: 0; }
+  .btn.danger { background: var(--bad); }
   .msg { margin-top: 12px; padding: 10px 14px; border-radius: 8px; display: none; }
   .msg.err { display: block; background: rgba(194,59,59,.12); color: var(--bad); }
   .msg.ok { display: block; background: var(--accent-soft); color: var(--good); }
+  .msg.warn { display: block; background: rgba(176,125,16,.14); color: var(--warn); }
   .muted { color: var(--muted); font-size: .88rem; }
   .summary { background: var(--accent-soft); border-radius: 8px; padding: 10px 14px; margin-top: 12px; display: none; }
   footer { text-align: center; color: var(--muted); font-size: .8rem; margin-top: 30px; }
@@ -108,28 +101,38 @@
     background: rgba(237,161,0,.14); border-radius: 8px; padding: 8px 12px;
     font-size: .82rem; margin-bottom: 14px; display: none;
   }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: .8rem; }
+  .st { border-radius: 999px; padding: 2px 10px; font-size: .78rem; font-weight: 600; white-space: nowrap; }
+  .st.pending { background: rgba(176,125,16,.15); color: var(--warn); }
+  .st.confirmed { background: var(--accent-soft); color: var(--good); }
+  .st.cancelled { background: rgba(194,59,59,.12); color: var(--bad); }
+  .totals { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .tot {
+    flex: 1 1 160px; border: 1.5px solid var(--border); border-radius: 10px; padding: 12px;
+  }
+  .tot .v { font-size: 1.4rem; font-weight: 700; }
+  .tot.owe .v { color: var(--bad); }
+  .tot .l { color: var(--muted); font-size: .82rem; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="demo-note" id="demoNote">Preview mode — no backend connected yet; slots shown are samples and bookings aren’t saved.</div>
+  <div class="demo-note" id="demoNote">Preview mode — no backend connected; slots and lessons shown are samples and nothing is saved.</div>
 
   <header class="hero">
     <h1 id="hName">Driving Lessons</h1>
     <p id="hArea">Loading…</p>
     <div class="badges">
       <span class="badge">DVSA-approved instructor</span>
-      <span class="badge" id="bManual">Manual &amp; automatic</span>
+      <span class="badge">Manual tuition</span>
       <span class="badge">Door-to-door pickup</span>
     </div>
   </header>
 
   <div class="card">
     <h2>1 · Choose your lesson</h2>
-    <div class="seg" id="typeSeg">
-      <button type="button" data-type="manual" class="sel">Manual</button>
-      <button type="button" data-type="automatic">Automatic</button>
-    </div>
     <div class="prices" id="prices"></div>
   </div>
 
@@ -152,24 +155,45 @@
         <div><label for="fPhone">Phone</label><input id="fPhone" type="tel" required autocomplete="tel"></div>
         <div><label for="fPostcode">Pickup postcode</label><input id="fPostcode" required maxlength="10" placeholder="e.g. LS1 4AB" autocomplete="postal-code"></div>
       </div>
+      <label for="fRepeat">Repeat weekly?</label>
+      <select id="fRepeat">
+        <option value="1">Just this lesson</option>
+        <option value="4">Weekly — same time for 4 weeks</option>
+        <option value="8">Weekly — same time for 8 weeks</option>
+        <option value="12">Weekly — same time for 12 weeks</option>
+      </select>
       <label for="fNotes">Anything I should know? (optional)</label>
       <textarea id="fNotes" rows="2" maxlength="500" placeholder="e.g. test booked for September, nervous beginner, prefer quiet roads first"></textarea>
       <button class="btn" id="submitBtn" type="submit" disabled>Request booking</button>
       <div class="msg" id="msg"></div>
-      <p class="muted">Your request is sent to the instructor to confirm — you’ll get a reference code straight away and a confirmation by phone or email. No payment is taken online.</p>
+      <p class="muted">Your request is sent to the instructor to confirm — you’ll get a reference code straight away and a confirmation by phone or email. No payment is taken online; lessons are paid directly to the instructor.</p>
     </form>
   </div>
 
-  <div class="card">
-    <h2>Need to cancel?</h2>
-    <form id="cancelForm">
+  <div class="card" id="portalCard">
+    <h2>My lessons</h2>
+    <p class="muted">See your upcoming and past lessons, what each costs, and cancel if you need to. Sign in with your email and any booking reference you’ve been given.</p>
+    <form id="portalForm">
       <div class="row2">
-        <div><label for="cRef">Booking reference</label><input id="cRef" maxlength="8" placeholder="e.g. K7M2XQ"></div>
-        <div><label for="cEmail">Email used to book</label><input id="cEmail" type="email"></div>
+        <div><label for="pEmail">Email used to book</label><input id="pEmail" type="email"></div>
+        <div><label for="pRef">Any booking reference</label><input id="pRef" maxlength="8" placeholder="e.g. K7M2XQ"></div>
       </div>
-      <button class="btn" type="submit">Cancel booking</button>
-      <div class="msg" id="cMsg"></div>
+      <button class="btn" type="submit">Show my lessons</button>
+      <div class="msg" id="pMsg"></div>
     </form>
+    <div id="portal" style="display:none; margin-top:16px">
+      <div class="totals">
+        <div class="tot owe"><div class="v" id="tOwed">£0</div><div class="l">Money owed</div></div>
+        <div class="tot"><div class="v" id="tUpcoming">£0</div><div class="l">Upcoming lessons cost</div></div>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr><th>When</th><th>Length</th><th>Price</th><th>Status</th><th></th></tr></thead>
+          <tbody id="portalBody"></tbody>
+        </table>
+      </div>
+      <p class="muted" id="portalNote"></p>
+    </div>
   </div>
 
   <footer>
@@ -180,36 +204,37 @@
 
 <script>
 'use strict';
-// Set to your Cloudflare Worker URL once deployed, e.g. 'https://booking.example.com'.
-// Empty string = preview mode with sample data.
-const API_BASE = '';
-
+// Same-origin API (pages are served by the Worker). If /api/config is
+// unreachable — e.g. the file is being previewed standalone — the page
+// drops into demo mode with sample data.
 const $ = id => document.getElementById(id);
-const DEMO = !API_BASE;
+let DEMO = false;
 
 let CONFIG = {
-  name: 'Driving Lessons', area: 'Local lessons with door-to-door pickup',
-  phone: '', email: '', prices: { 60: 38, 90: 55, 120: 70 },
-  notice_hours: 12, horizon_days: 21, durations: [60, 90, 120],
+  name: 'Driving Lessons', area: 'Local manual lessons with door-to-door pickup',
+  phone: '', email: '', prices: { 60: 44, 90: 66, 120: 88 },
+  notice_hours: 12, cancel_notice_hours: 24, late_cancel_fee: 44,
+  horizon_days: 21, durations: [60, 90, 120],
 };
-const state = { type: 'manual', duration: 60, date: null, time: null, slots: {} };
+const state = { duration: 60, date: null, time: null, slots: {}, portal: null, portalAuth: null };
 
-function fmtLen(m) { return m === 60 ? '1 hour' : m === 90 ? '1½ hours' : (m / 60) + ' hours'; }
+const fmtLen = m => m === 60 ? '1 hour' : m === 90 ? '1½ hours' : (m / 60) + ' hours';
+const fmtMoney = v => '£' + (Number.isInteger(v) ? v : v.toFixed(2));
 
 async function api(path, opts) {
-  const r = await fetch(API_BASE + path, opts);
+  const r = await fetch(path, opts);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || 'Something went wrong — please try again.');
   return j;
 }
 
-// --- preview-mode sample data ---
+// --- demo fixtures ---
 function demoSlots() {
   const out = {};
   const today = new Date();
   for (let i = 1; i <= 14; i++) {
     const d = new Date(today); d.setDate(d.getDate() + i);
-    if (d.getDay() === 0) continue; // Sundays off
+    if (d.getDay() === 0) continue;
     const ds = d.toISOString().slice(0, 10);
     const times = [];
     for (let h = 9; h <= 16; h++) if ((h + i) % 3 !== 0) times.push(String(h).padStart(2, '0') + ':00');
@@ -217,29 +242,38 @@ function demoSlots() {
   }
   return out;
 }
+function demoLessons() {
+  const mk = (off, time, status, paid) => {
+    const d = new Date(); d.setDate(d.getDate() + off);
+    return { ref: 'DM' + Math.abs(off) + 'X' + time.slice(0, 2), date: d.toISOString().slice(0, 10),
+      time, duration_min: 60, price: 44, status, cancelled_by: null, fee: 0, paid, past: off < 0 };
+  };
+  return [mk(-7, '10:00', 'confirmed', true), mk(-2, '14:00', 'confirmed', false),
+    mk(3, '10:00', 'confirmed', false), mk(10, '10:00', 'pending', false)];
+}
 
 async function loadConfig() {
-  if (!DEMO) {
-    try { CONFIG = { ...CONFIG, ...(await api('/api/config')) }; } catch {}
-  } else {
+  try {
+    CONFIG = { ...CONFIG, ...(await api('/api/config')) };
+  } catch {
+    DEMO = true;
     $('demoNote').style.display = 'block';
   }
   $('hName').textContent = CONFIG.name;
   $('hArea').textContent = CONFIG.area;
   $('fContact').textContent = [CONFIG.phone, CONFIG.email].filter(Boolean).join(' · ');
   $('horizonNote').textContent =
-    `Bookings open up to ${CONFIG.horizon_days} days ahead (minimum ${CONFIG.notice_hours}h notice). All times UK.`;
+    `Bookings open up to ${CONFIG.horizon_days} days ahead (minimum ${CONFIG.notice_hours}h notice to book). All times UK.`;
   renderPrices();
 }
 
 function renderPrices() {
   $('prices').innerHTML = '';
   for (const d of CONFIG.durations) {
-    const p = CONFIG.prices[d];
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'price' + (state.duration === d ? ' sel' : '');
-    b.innerHTML = `<span class="amt">£${p}</span><span class="len">${fmtLen(d)}</span>`;
+    b.innerHTML = `<span class="amt">${fmtMoney(CONFIG.prices[d])}</span><span class="len">${fmtLen(d)} · manual</span>`;
     b.onclick = () => { state.duration = d; state.time = null; renderPrices(); loadSlots(); };
     $('prices').appendChild(b);
   }
@@ -298,45 +332,47 @@ function renderTimes() {
   const s = $('summary');
   if (state.date && state.time) {
     const d = new Date(state.date + 'T12:00:00');
+    const weeks = parseInt($('fRepeat').value, 10);
     s.style.display = 'block';
-    s.textContent = `Selected: ${fmtLen(state.duration)} ${state.type} lesson — ` +
-      `${d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })} at ${state.time} · £${CONFIG.prices[state.duration]}`;
+    s.textContent = `Selected: ${fmtLen(state.duration)} manual lesson — ` +
+      `${d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })} at ${state.time} · ` +
+      `${fmtMoney(CONFIG.prices[state.duration])}` +
+      (weeks > 1 ? ` per lesson, weekly for ${weeks} weeks` : '');
     $('submitBtn').disabled = false;
   } else {
     s.style.display = 'none';
     $('submitBtn').disabled = true;
   }
 }
-
-$('typeSeg').addEventListener('click', e => {
-  const b = e.target.closest('button[data-type]');
-  if (!b) return;
-  state.type = b.dataset.type;
-  for (const x of $('typeSeg').children) x.classList.toggle('sel', x === b);
-});
+$('fRepeat').addEventListener('change', renderTimes);
 
 $('bookForm').addEventListener('submit', async e => {
   e.preventDefault();
   const msg = $('msg'); msg.className = 'msg';
   $('submitBtn').disabled = true;
   const body = {
-    date: state.date, time: state.time, duration: state.duration, lesson_type: state.type,
+    date: state.date, time: state.time, duration: state.duration,
+    repeat_weeks: parseInt($('fRepeat').value, 10),
     name: $('fName').value.trim(), email: $('fEmail').value.trim(),
     phone: $('fPhone').value.trim(), postcode: $('fPostcode').value.trim(),
     notes: $('fNotes').value.trim(),
   };
   try {
-    let ref;
+    let j;
     if (DEMO) {
-      ref = 'DEMO' + Math.floor(Math.random() * 90 + 10);
+      j = { ref: 'DEMO' + Math.floor(Math.random() * 90 + 10),
+        booked: [{ date: state.date }], skipped: [] };
     } else {
-      ref = (await api('/api/book', {
+      j = await api('/api/book', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      })).ref;
+      });
     }
     msg.className = 'msg ok';
-    msg.textContent = `Request sent! Your reference is ${ref} — keep it to cancel or change the lesson. ` +
-      `The instructor will confirm shortly.`;
+    let text = `Request sent! Your reference is ${j.ref} — keep it: it signs you into “My lessons” below. The instructor will confirm shortly.`;
+    if (j.booked.length > 1) text = `Request sent for ${j.booked.length} weekly lessons! Your reference is ${j.ref}.` +
+      (j.skipped.length ? ` Unavailable weeks skipped: ${j.skipped.join(', ')}.` : '') +
+      ' The instructor will confirm shortly.';
+    msg.textContent = text;
     $('bookForm').reset();
     state.time = null;
     loadSlots();
@@ -348,21 +384,87 @@ $('bookForm').addEventListener('submit', async e => {
   }
 });
 
-$('cancelForm').addEventListener('submit', async e => {
+// --- pupil portal ---
+$('portalForm').addEventListener('submit', async e => {
   e.preventDefault();
-  const m = $('cMsg'); m.className = 'msg';
-  const ref = $('cRef').value.trim(), email = $('cEmail').value.trim();
-  if (!ref || !email) { m.className = 'msg err'; m.textContent = 'Enter both your reference and email.'; return; }
+  const m = $('pMsg'); m.className = 'msg';
+  const email = $('pEmail').value.trim(), ref = $('pRef').value.trim();
+  if (!email || !ref) { m.className = 'msg err'; m.textContent = 'Enter both your email and a booking reference.'; return; }
   try {
-    if (!DEMO) await api('/api/cancel', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ref, email }),
-    });
-    m.className = 'msg ok';
-    m.textContent = 'If that booking exists, it has been cancelled. You’ll get a confirmation if so.';
-    $('cancelForm').reset();
+    let j;
+    if (DEMO) {
+      j = { name: 'Sample Pupil', lessons: demoLessons(), owed: 44, upcoming_cost: 88,
+        cancel_notice_hours: CONFIG.cancel_notice_hours, late_cancel_fee: CONFIG.late_cancel_fee };
+    } else {
+      j = await api('/api/my-lessons', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, ref }),
+      });
+    }
+    state.portal = j;
+    state.portalAuth = { email, ref };
+    renderPortal();
   } catch (err) { m.className = 'msg err'; m.textContent = err.message; }
 });
+
+function renderPortal() {
+  const j = state.portal;
+  $('portal').style.display = 'block';
+  $('tOwed').textContent = fmtMoney(j.owed);
+  $('tUpcoming').textContent = fmtMoney(j.upcoming_cost);
+  $('portalNote').textContent =
+    `Cancelling less than ${j.cancel_notice_hours} hours before a lesson incurs a ` +
+    `${fmtMoney(j.late_cancel_fee)} last-minute cancellation fee. “Owed” covers past unpaid lessons and any cancellation fees.`;
+  const tb = $('portalBody'); tb.innerHTML = '';
+  for (const l of j.lessons) {
+    const tr = document.createElement('tr');
+    const when = new Date(l.date + 'T12:00:00')
+      .toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    let statusText = l.status;
+    if (l.status === 'cancelled') statusText = l.cancelled_by === 'instructor' ? 'cancelled (instructor)' : 'cancelled';
+    let priceCell = fmtMoney(l.price);
+    if (l.status === 'cancelled') priceCell = l.fee > 0 ? `fee ${fmtMoney(l.fee)}${l.paid ? ' · paid' : ' · owed'}` : '—';
+    else if (l.past) priceCell += l.paid ? ' · paid' : ' · owed';
+    tr.innerHTML =
+      `<td><b>${when}</b> ${l.time}</td>` +
+      `<td>${fmtLen(l.duration_min)}</td>` +
+      `<td>${priceCell}</td>` +
+      `<td><span class="st ${l.status}">${statusText}</span></td>` +
+      `<td></td>`;
+    if (!l.past && l.status !== 'cancelled') {
+      const btn = document.createElement('button');
+      btn.className = 'btn sm danger';
+      btn.textContent = 'Cancel';
+      btn.onclick = () => cancelLesson(l);
+      tr.lastElementChild.appendChild(btn);
+    }
+    tb.appendChild(tr);
+  }
+}
+
+async function cancelLesson(l) {
+  const j = state.portal;
+  const start = new Date(l.date + 'T' + l.time);
+  const late = (start - new Date()) < j.cancel_notice_hours * 3600000;
+  const warning = late
+    ? `You are cancelling within the minimum notice period (${j.cancel_notice_hours} hours) — you will owe a last-minute cancellation fee of ${fmtMoney(j.late_cancel_fee)}.\n\nCancel this lesson?`
+    : `You are cancelling before the minimum notice period (${j.cancel_notice_hours} hours) — you will not owe any money for this lesson.\n\nCancel this lesson?`;
+  if (!confirm(warning)) return;
+  const m = $('pMsg'); m.className = 'msg';
+  try {
+    let res = { late, fee: late ? j.late_cancel_fee : 0 };
+    if (!DEMO) res = await api('/api/cancel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref: l.ref, email: state.portalAuth.email }),
+    });
+    m.className = res.late ? 'msg warn' : 'msg ok';
+    m.textContent = res.late
+      ? `Lesson cancelled. A last-minute cancellation fee of ${fmtMoney(res.fee)} has been added to your account.`
+      : 'Lesson cancelled — nothing owed for it.';
+    if (!DEMO) $('portalForm').requestSubmit(); // refresh totals + list
+    else { l.status = 'cancelled'; l.cancelled_by = 'student'; l.fee = res.fee; renderPortal(); }
+  } catch (err) { m.className = 'msg err'; m.textContent = err.message; }
+}
 
 loadConfig().then(loadSlots);
 </script>

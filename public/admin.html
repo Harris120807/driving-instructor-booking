@@ -28,7 +28,7 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--page); color: var(--text);
     font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  .wrap { max-width: 960px; margin: 0 auto; padding: 16px 16px 60px; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 16px 16px 60px; }
   h1 { font-size: 1.3rem; margin: 8px 0 16px; }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
     padding: 16px; margin-bottom: 16px; }
@@ -45,10 +45,14 @@
   table { width: 100%; border-collapse: collapse; font-size: .9rem; }
   th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-weight: 600; font-size: .8rem; }
-  .st { border-radius: 999px; padding: 2px 10px; font-size: .78rem; font-weight: 600; }
+  .st { border-radius: 999px; padding: 2px 10px; font-size: .78rem; font-weight: 600; white-space: nowrap; }
   .st.pending { background: rgba(176,125,16,.15); color: var(--warn); }
   .st.confirmed { background: var(--accent-soft); color: var(--good); }
   .st.cancelled { background: rgba(194,59,59,.12); color: var(--bad); }
+  .pp { border-radius: 999px; padding: 2px 10px; font-size: .78rem; font-weight: 600; cursor: pointer; border: 0; }
+  .pp.yes { background: var(--accent-soft); color: var(--good); }
+  .pp.no { background: rgba(194,59,59,.12); color: var(--bad); }
+  .owed { color: var(--bad); font-weight: 700; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
   .dayrow { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
@@ -58,6 +62,7 @@
   .msg { padding: 8px 12px; border-radius: 8px; margin-top: 10px; display: none; font-size: .88rem; }
   .msg.ok { display: block; background: var(--accent-soft); color: var(--good); }
   .msg.err { display: block; background: rgba(194,59,59,.12); color: var(--bad); }
+  .msg.warn { display: block; background: rgba(176,125,16,.14); color: var(--warn); }
   #login { max-width: 380px; margin: 80px auto; }
   #console { display: none; }
   .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -74,9 +79,12 @@
   .field { margin-bottom: 10px; }
   .field label { display: block; font-size: .8rem; color: var(--muted); margin-bottom: 3px; }
   .field input { width: 100%; }
+  .field .hint { font-size: .78rem; color: var(--muted); margin-top: 2px; }
   .prices3 { display: flex; gap: 10px; }
   .prices3 .field { flex: 1; }
-  .ovrow { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .ovrow { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+  tr.srow { cursor: pointer; }
+  tr.srow:hover td { background: var(--accent-soft); }
 </style>
 </head>
 <body>
@@ -99,8 +107,9 @@
       <button class="btn ghost sm" id="signOut">Sign out</button>
     </div>
 
-    <div class="tabs">
+    <div class="tabs" id="tabs">
       <button class="tab sel" data-pane="bookings">Bookings</button>
+      <button class="tab" data-pane="students">Students</button>
       <button class="tab" data-pane="schedule">Availability</button>
       <button class="tab" data-pane="settings">Settings</button>
     </div>
@@ -115,11 +124,35 @@
         </div>
         <div style="overflow-x:auto">
           <table>
-            <thead><tr><th>When</th><th>Lesson</th><th>Pupil</th><th>Contact</th><th>Pickup</th><th>Status</th><th></th></tr></thead>
-            <tbody id="bookingsBody"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+            <thead><tr><th>When</th><th>Lesson</th><th>Pupil</th><th>Contact</th><th>Pickup</th><th>£</th><th>Status</th><th></th></tr></thead>
+            <tbody id="bookingsBody"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
           </table>
         </div>
         <div class="msg" id="bMsg"></div>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-students">
+      <div class="card">
+        <h2>Students &amp; accounts</h2>
+        <p class="muted">One row per pupil. “Owed” = past lessons not yet paid + unpaid late-cancellation fees. Click a row for their full account.</p>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr><th>Pupil</th><th>Contact</th><th>Lessons</th><th>Upcoming</th><th>Upcoming cost</th><th>Owed</th></tr></thead>
+            <tbody id="studentsBody"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card" id="studentDetail" style="display:none">
+        <h2 id="sdTitle"></h2>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr><th>When</th><th>Length</th><th>£</th><th>Status</th><th>Payment</th></tr></thead>
+            <tbody id="studentLessons"></tbody>
+          </table>
+        </div>
+        <p class="muted">Tap the payment pill to toggle paid / owed. For cancelled lessons the pill settles the cancellation fee.</p>
+        <div class="msg" id="sdMsg"></div>
       </div>
     </div>
 
@@ -133,11 +166,15 @@
           <div class="msg" id="tMsg"></div>
         </div>
         <div class="card">
-          <h2>Days off / holidays</h2>
+          <h2>Time off / holidays</h2>
+          <p class="muted">Block a single day or a longer period. Any booked lessons inside the blocked period are automatically cancelled (no pupil fee) — you’ll be shown who, so you can let them know.</p>
           <div class="ovrow">
-            <input type="date" id="ovDate">
+            <div><label class="muted" for="ovStart">From</label><br><input type="date" id="ovStart"></div>
+            <div><label class="muted" for="ovEnd">To (same day if blank)</label><br><input type="date" id="ovEnd"></div>
+          </div>
+          <div class="ovrow">
             <input type="text" id="ovNote" placeholder="note (optional)" style="flex:1">
-            <button class="btn sm" id="addOv">Block day</button>
+            <button class="btn sm" id="addOv">Block time off</button>
           </div>
           <div id="ovList" class="muted">Loading…</div>
           <div class="msg" id="oMsg"></div>
@@ -152,16 +189,30 @@
         <div class="field"><label for="sArea">Area covered (shown on the site)</label><input id="sArea" maxlength="200"></div>
         <div class="field"><label for="sPhone">Phone</label><input id="sPhone" maxlength="30"></div>
         <div class="field"><label for="sEmail">Email</label><input id="sEmail" type="email" maxlength="200"></div>
-        <h2 style="margin-top:18px">Prices (£)</h2>
+        <h2 style="margin-top:18px">Lesson prices (£, manual)</h2>
         <div class="prices3">
           <div class="field"><label for="p60">1 hour</label><input id="p60" type="number" min="0" step="0.5"></div>
           <div class="field"><label for="p90">1½ hours</label><input id="p90" type="number" min="0" step="0.5"></div>
           <div class="field"><label for="p120">2 hours</label><input id="p120" type="number" min="0" step="0.5"></div>
         </div>
         <h2 style="margin-top:18px">Booking rules</h2>
-        <div class="prices3">
-          <div class="field"><label for="sNotice">Min notice (hours)</label><input id="sNotice" type="number" min="0" max="72"></div>
-          <div class="field"><label for="sHorizon">Book ahead (days)</label><input id="sHorizon" type="number" min="1" max="90"></div>
+        <div class="field">
+          <label for="sNotice">Minimum notice to <b>book</b> (hours)</label>
+          <input id="sNotice" type="number" min="0" max="72">
+          <div class="hint">Pupils can’t book a slot starting sooner than this. Nothing to do with cancelling.</div>
+        </div>
+        <div class="field">
+          <label for="sCancelNotice">Minimum notice to <b>cancel</b> without charge (hours)</label>
+          <input id="sCancelNotice" type="number" min="0" max="168">
+          <div class="hint">Pupils cancelling closer to the lesson than this owe the late-cancellation fee below.</div>
+        </div>
+        <div class="field">
+          <label for="sFee">Late-cancellation fee (£)</label>
+          <input id="sFee" type="number" min="0" step="0.5">
+        </div>
+        <div class="field">
+          <label for="sHorizon">How far ahead pupils can book (days)</label>
+          <input id="sHorizon" type="number" min="1" max="90">
         </div>
         <button class="btn" id="saveSettings">Save settings</button>
         <div class="msg" id="sMsg"></div>
@@ -172,28 +223,36 @@
 
 <script>
 'use strict';
-// Same Worker URL as index.html. Empty = preview mode (sample data, nothing saved).
-const API_BASE = '';
-
+// Same-origin API (served by the Worker). Unreachable backend = demo mode.
 const $ = id => document.getElementById(id);
-const DEMO = !API_BASE;
+let DEMO = false;
 const DAYS = [['mon','Mon'],['tue','Tue'],['wed','Wed'],['thu','Thu'],['fri','Fri'],['sat','Sat'],['sun','Sun']];
 let KEY = sessionStorage.getItem('di-admin-key') || '';
 
 async function api(path, opts = {}) {
   opts.headers = { ...(opts.headers || {}), Authorization: 'Bearer ' + KEY };
-  const r = await fetch(API_BASE + path, opts);
+  const r = await fetch(path, opts);
   if (r.status === 401) { signOut(); throw new Error('Signed out — key not accepted.'); }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || 'Request failed');
   return j;
 }
 
-function flash(el, ok, text) {
-  el.className = 'msg ' + (ok ? 'ok' : 'err');
+function flash(el, kind, text, sticky) {
+  el.className = 'msg ' + kind;
   el.textContent = text;
-  setTimeout(() => { el.className = 'msg'; }, 4000);
+  if (!sticky) setTimeout(() => { el.className = 'msg'; }, 5000);
 }
+const ok = (el, t) => flash(el, 'ok', t);
+const err = (el, t) => flash(el, 'err', t);
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g,
+    c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+const fmtMoney = v => '£' + (Number.isInteger(v) ? v : (+v).toFixed(2));
+const fmtWhen = (date, time) => new Date(date + 'T12:00:00')
+  .toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) + (time ? ' ' + time : '');
 
 function signOut() {
   KEY = '';
@@ -204,8 +263,15 @@ function signOut() {
 
 async function signIn(key) {
   KEY = key;
-  if (DEMO) { enter(); return; }
-  await api('/admin/settings'); // 401s if wrong
+  // Detect demo mode (no backend at all) vs a wrong key
+  try {
+    const r = await fetch('/admin/settings', { headers: { Authorization: 'Bearer ' + KEY } });
+    if (r.status === 401) throw new Error('Key not accepted.');
+    await r.json();
+  } catch (e) {
+    if (String(e.message).includes('not accepted')) throw e;
+    DEMO = true; // network-level failure = previewing without a backend
+  }
   sessionStorage.setItem('di-admin-key', key);
   enter();
 }
@@ -214,6 +280,7 @@ function enter() {
   $('login').style.display = 'none';
   $('console').style.display = 'block';
   loadBookings();
+  loadStudents();
   loadSchedule();
   loadSettings();
 }
@@ -221,11 +288,11 @@ function enter() {
 $('loginForm').addEventListener('submit', async e => {
   e.preventDefault();
   try { await signIn($('keyInput').value.trim()); }
-  catch (err) { flash($('loginMsg'), false, err.message); }
+  catch (e2) { err($('loginMsg'), e2.message); }
 });
 $('signOut').onclick = signOut;
 
-// Tabs — NOTE: pane list is driven by data-pane attributes, nothing hard-coded
+// Tabs — pane list driven entirely by data-pane attributes
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('sel', x === t));
   document.querySelectorAll('.pane').forEach(p =>
@@ -234,15 +301,25 @@ document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
 
 // --- demo fixtures ---
 function demoBookings() {
-  const d1 = new Date(); d1.setDate(d1.getDate() + 2);
-  const d2 = new Date(); d2.setDate(d2.getDate() + 3);
+  const day = off => { const d = new Date(); d.setDate(d.getDate() + off); return d.toISOString().slice(0, 10); };
   return [
-    { id: 1, ref: 'K7M2XQ', date: d1.toISOString().slice(0,10), time: '10:00', duration_min: 60,
-      lesson_type: 'manual', name: 'Sample Pupil', email: 'pupil@example.com', phone: '07700 900123',
-      postcode: 'LS1 4AB', notes: 'Nervous beginner', status: 'pending' },
-    { id: 2, ref: 'P3T8WN', date: d2.toISOString().slice(0,10), time: '14:30', duration_min: 120,
-      lesson_type: 'automatic', name: 'Another Pupil', email: 'p2@example.com', phone: '07700 900456',
-      postcode: 'LS6 2AA', notes: '', status: 'confirmed' },
+    { id: 1, ref: 'K7M2XQ', series: null, date: day(2), time: '10:00', duration_min: 60, price: 44,
+      name: 'Sample Pupil', email: 'pupil@example.com', phone: '07700 900123',
+      postcode: 'LS1 4AB', notes: 'Nervous beginner', status: 'pending', cancelled_by: null, fee: 0, paid: 0 },
+    { id: 2, ref: 'P3T8WN', series: 'S1AB2C', date: day(3), time: '14:30', duration_min: 120, price: 88,
+      name: 'Another Pupil', email: 'p2@example.com', phone: '07700 900456',
+      postcode: 'LS6 2AA', notes: '', status: 'confirmed', cancelled_by: null, fee: 0, paid: 0 },
+    { id: 3, ref: 'H9Q4RD', series: null, date: day(-3), time: '11:00', duration_min: 60, price: 44,
+      name: 'Sample Pupil', email: 'pupil@example.com', phone: '07700 900123',
+      postcode: 'LS1 4AB', notes: '', status: 'confirmed', cancelled_by: null, fee: 0, paid: 0 },
+  ];
+}
+function demoStudents() {
+  return [
+    { email: 'pupil@example.com', name: 'Sample Pupil', phone: '07700 900123', postcode: 'LS1 4AB',
+      lessons: 2, upcoming: 1, cancelled: 0, owed: 44, upcoming_cost: 44 },
+    { email: 'p2@example.com', name: 'Another Pupil', phone: '07700 900456', postcode: 'LS6 2AA',
+      lessons: 1, upcoming: 1, cancelled: 0, owed: 0, upcoming_cost: 88 },
   ];
 }
 
@@ -262,21 +339,20 @@ async function loadBookings() {
   } else {
     try {
       rows = (await api('/admin/bookings' + (bookingsFilter ? '?status=' + bookingsFilter : ''))).bookings;
-    } catch (err) { flash($('bMsg'), false, err.message); return; }
+    } catch (e) { err($('bMsg'), e.message); return; }
   }
   const tb = $('bookingsBody'); tb.innerHTML = '';
-  if (!rows.length) { tb.innerHTML = '<tr><td colspan="7" class="muted">No bookings here.</td></tr>'; return; }
+  if (!rows.length) { tb.innerHTML = '<tr><td colspan="8" class="muted">No bookings here.</td></tr>'; return; }
   for (const b of rows) {
     const tr = document.createElement('tr');
-    const when = new Date(b.date + 'T12:00:00')
-      .toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
     tr.innerHTML =
-      `<td><b>${when}</b> ${b.time}</td>` +
-      `<td>${b.duration_min}min ${b.lesson_type}</td>` +
+      `<td><b>${fmtWhen(b.date)}</b> ${b.time}${b.series ? '<br><span class="muted">weekly</span>' : ''}</td>` +
+      `<td>${b.duration_min}min</td>` +
       `<td>${esc(b.name)}${b.notes ? `<br><span class="muted">${esc(b.notes)}</span>` : ''}</td>` +
       `<td>${esc(b.phone)}<br><span class="muted">${esc(b.email)}</span></td>` +
       `<td>${esc(b.postcode)}</td>` +
-      `<td><span class="st ${b.status}">${b.status}</span><br><span class="muted">${b.ref}</span></td>` +
+      `<td>${fmtMoney(b.price)}${b.fee > 0 ? `<br><span class="owed">fee ${fmtMoney(b.fee)}</span>` : ''}</td>` +
+      `<td><span class="st ${b.status}">${b.status}${b.cancelled_by === 'instructor' ? ' (you)' : ''}</span><br><span class="muted">${b.ref}</span></td>` +
       `<td></td>`;
     const actions = tr.lastElementChild;
     if (b.status === 'pending') actions.append(actBtn('Confirm', 'confirmed', b));
@@ -291,23 +367,86 @@ function actBtn(label, action, b, danger) {
   btn.style.margin = '2px';
   btn.textContent = label;
   btn.onclick = async () => {
-    if (danger && !confirm(`Cancel ${b.name}'s lesson on ${b.date} ${b.time}?`)) return;
+    if (danger && !confirm(`Cancel ${b.name}'s lesson on ${b.date} ${b.time}? (No fee for the pupil — this counts as an instructor cancellation.)`)) return;
     try {
       if (!DEMO) await api('/admin/booking', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: b.id, action }),
       });
       else b.status = action;
-      flash($('bMsg'), true, `${b.ref} → ${action}. Remember to tell the pupil.`);
-      loadBookings();
-    } catch (err) { flash($('bMsg'), false, err.message); }
+      ok($('bMsg'), `${b.ref} → ${action}. Remember to tell the pupil.`);
+      loadBookings(); loadStudents();
+    } catch (e) { err($('bMsg'), e.message); }
   };
   return btn;
 }
 
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g,
-    c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+// --- students ---
+async function loadStudents() {
+  let students;
+  if (DEMO) students = demoStudents();
+  else {
+    try { students = (await api('/admin/students')).students; }
+    catch (e) { $('studentsBody').innerHTML = `<tr><td colspan="6" class="muted">${esc(e.message)}</td></tr>`; return; }
+  }
+  const tb = $('studentsBody'); tb.innerHTML = '';
+  if (!students.length) { tb.innerHTML = '<tr><td colspan="6" class="muted">No pupils yet.</td></tr>'; return; }
+  for (const s of students) {
+    const tr = document.createElement('tr');
+    tr.className = 'srow';
+    tr.innerHTML =
+      `<td><b>${esc(s.name)}</b><br><span class="muted">${esc(s.postcode)}</span></td>` +
+      `<td>${esc(s.phone)}<br><span class="muted">${esc(s.email)}</span></td>` +
+      `<td>${s.lessons}</td><td>${s.upcoming}</td><td>${fmtMoney(s.upcoming_cost)}</td>` +
+      `<td>${s.owed > 0 ? `<span class="owed">${fmtMoney(s.owed)}</span>` : fmtMoney(0)}</td>`;
+    tr.onclick = () => loadStudent(s);
+    tb.appendChild(tr);
+  }
+}
+
+async function loadStudent(s) {
+  $('studentDetail').style.display = 'block';
+  $('sdTitle').textContent = `${s.name} — account`;
+  let lessons;
+  if (DEMO) {
+    lessons = demoBookings().filter(b => b.email === s.email)
+      .map(b => ({ ...b, past: b.date < new Date().toISOString().slice(0, 10), owed_now: 0 }));
+  } else {
+    try { lessons = (await api('/admin/student?email=' + encodeURIComponent(s.email))).lessons; }
+    catch (e) { err($('sdMsg'), e.message); return; }
+  }
+  const tb = $('studentLessons'); tb.innerHTML = '';
+  for (const l of lessons) {
+    const tr = document.createElement('tr');
+    let amount = fmtMoney(l.price);
+    if (l.status === 'cancelled') amount = l.fee > 0 ? `fee ${fmtMoney(l.fee)}` : '—';
+    tr.innerHTML =
+      `<td><b>${fmtWhen(l.date)}</b> ${l.time}</td>` +
+      `<td>${l.duration_min}min</td>` +
+      `<td>${amount}</td>` +
+      `<td><span class="st ${l.status}">${l.status}${l.cancelled_by === 'instructor' ? ' (you)' : ''}</span></td>` +
+      `<td></td>`;
+    const cell = tr.lastElementChild;
+    const chargeable = l.status === 'cancelled' ? l.fee > 0 : true;
+    if (chargeable) {
+      const pill = document.createElement('button');
+      pill.className = 'pp ' + (l.paid ? 'yes' : 'no');
+      pill.textContent = l.paid ? 'paid' : (l.past || l.status === 'cancelled' ? 'owed' : 'not yet due');
+      pill.onclick = async () => {
+        try {
+          if (!DEMO) await api('/admin/paid', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: l.id, paid: l.paid ? 0 : 1 }),
+          });
+          l.paid = l.paid ? 0 : 1;
+          ok($('sdMsg'), 'Payment updated.');
+          loadStudent(s); loadStudents();
+        } catch (e) { err($('sdMsg'), e.message); }
+      };
+      cell.appendChild(pill);
+    } else cell.innerHTML = '<span class="muted">—</span>';
+    tb.appendChild(tr);
+  }
 }
 
 // --- schedule ---
@@ -322,7 +461,7 @@ async function loadSchedule() {
     try {
       const j = await api('/admin/schedule');
       TEMPLATE = j.template; overrides = j.overrides;
-    } catch (err) { flash($('tMsg'), false, err.message); }
+    } catch (e) { err($('tMsg'), e.message); }
   }
   renderWeek();
   renderOverrides(overrides);
@@ -351,7 +490,7 @@ $('saveTemplate').onclick = async () => {
   const t = {};
   for (const [k] of DAYS) {
     t[k] = $('on-' + k).checked ? { start: $('st-' + k).value, end: $('en-' + k).value } : null;
-    if (t[k] && t[k].start >= t[k].end) { flash($('tMsg'), false, `${k}: start must be before end.`); return; }
+    if (t[k] && t[k].start >= t[k].end) { err($('tMsg'), `${k}: start must be before end.`); return; }
   }
   try {
     if (!DEMO) await api('/admin/schedule', {
@@ -359,31 +498,31 @@ $('saveTemplate').onclick = async () => {
       body: JSON.stringify({ template: t }),
     });
     TEMPLATE = t;
-    flash($('tMsg'), true, 'Weekly hours saved.');
-  } catch (err) { flash($('tMsg'), false, err.message); }
+    ok($('tMsg'), 'Weekly hours saved.');
+  } catch (e) { err($('tMsg'), e.message); }
 };
 
 function renderOverrides(list) {
   const el = $('ovList');
-  if (!list.length) { el.textContent = 'No upcoming days off.'; return; }
+  if (!list.length) { el.textContent = 'No upcoming time off.'; return; }
   el.innerHTML = '';
   for (const o of list) {
     const row = document.createElement('div');
     row.className = 'ovrow';
-    const when = new Date(o.date + 'T12:00:00')
-      .toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-    row.innerHTML = `<span style="flex:1">${when}${o.note ? ` — <span class="muted">${esc(o.note)}</span>` : ''}</span>`;
+    const span = o.start_date === o.end_date ? fmtWhen(o.start_date)
+      : `${fmtWhen(o.start_date)} → ${fmtWhen(o.end_date)}`;
+    row.innerHTML = `<span style="flex:1">${span}${o.note ? ` — <span class="muted">${esc(o.note)}</span>` : ''}</span>`;
     const rm = document.createElement('button');
     rm.className = 'btn ghost sm'; rm.textContent = 'Reopen';
     rm.onclick = async () => {
       try {
         if (!DEMO) await api('/admin/override', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ date: o.date, remove: true }),
+          body: JSON.stringify({ id: o.id, remove: true }),
         });
-        flash($('oMsg'), true, o.date + ' reopened.');
+        ok($('oMsg'), 'Period reopened. (Auto-cancelled lessons stay cancelled — pupils rebook.)');
         loadSchedule();
-      } catch (err) { flash($('oMsg'), false, err.message); }
+      } catch (e) { err($('oMsg'), e.message); }
     };
     row.appendChild(rm);
     el.appendChild(row);
@@ -391,31 +530,43 @@ function renderOverrides(list) {
 }
 
 $('addOv').onclick = async () => {
-  const date = $('ovDate').value;
-  if (!date) { flash($('oMsg'), false, 'Pick a date.'); return; }
+  const start = $('ovStart').value, end = $('ovEnd').value || start;
+  if (!start) { err($('oMsg'), 'Pick at least a start date.'); return; }
+  if (end < start) { err($('oMsg'), 'End date is before start date.'); return; }
   try {
-    if (!DEMO) await api('/admin/override', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date, note: $('ovNote').value.trim() }),
-    });
-    flash($('oMsg'), true, date + ' blocked. Existing bookings that day are NOT auto-cancelled — check the bookings tab.');
-    $('ovNote').value = '';
-    loadSchedule();
-  } catch (err) { flash($('oMsg'), false, err.message); }
+    let cancelled = [];
+    if (!DEMO) {
+      cancelled = (await api('/admin/override', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_date: start, end_date: end, note: $('ovNote').value.trim() }),
+      })).cancelled;
+    }
+    if (cancelled.length) {
+      flash($('oMsg'), 'warn',
+        `Blocked. ${cancelled.length} lesson(s) auto-cancelled — please tell: ` +
+        cancelled.map(c => `${c.name} (${c.date} ${c.time}, ${c.phone})`).join('; '), true);
+    } else {
+      ok($('oMsg'), 'Time off blocked — no lessons were affected.');
+    }
+    $('ovNote').value = ''; $('ovEnd').value = '';
+    loadSchedule(); loadBookings(); loadStudents();
+  } catch (e) { err($('oMsg'), e.message); }
 };
 
 // --- settings ---
 async function loadSettings() {
   let c = { name: 'Your Driving School', area: '', phone: '', email: '',
-    prices: { 60: 38, 90: 55, 120: 70 }, notice_hours: 12, horizon_days: 21 };
+    prices: { 60: 44, 90: 66, 120: 88 }, notice_hours: 12,
+    cancel_notice_hours: 24, late_cancel_fee: 44, horizon_days: 21 };
   if (!DEMO) {
     try { c = (await api('/admin/settings')).config; }
-    catch (err) { flash($('sMsg'), false, err.message); }
+    catch (e) { err($('sMsg'), e.message); }
   }
   $('sName').value = c.name; $('sArea').value = c.area;
   $('sPhone').value = c.phone; $('sEmail').value = c.email;
   $('p60').value = c.prices[60]; $('p90').value = c.prices[90]; $('p120').value = c.prices[120];
-  $('sNotice').value = c.notice_hours; $('sHorizon').value = c.horizon_days;
+  $('sNotice').value = c.notice_hours; $('sCancelNotice').value = c.cancel_notice_hours;
+  $('sFee').value = c.late_cancel_fee; $('sHorizon').value = c.horizon_days;
   $('consTitle').textContent = c.name + ' — console';
 }
 
@@ -424,21 +575,23 @@ $('saveSettings').onclick = async () => {
     name: $('sName').value.trim(), area: $('sArea').value.trim(),
     phone: $('sPhone').value.trim(), email: $('sEmail').value.trim(),
     prices: { 60: parseFloat($('p60').value), 90: parseFloat($('p90').value), 120: parseFloat($('p120').value) },
-    notice_hours: parseInt($('sNotice').value, 10), horizon_days: parseInt($('sHorizon').value, 10),
+    notice_hours: parseFloat($('sNotice').value),
+    cancel_notice_hours: parseFloat($('sCancelNotice').value),
+    late_cancel_fee: parseFloat($('sFee').value),
+    horizon_days: parseInt($('sHorizon').value, 10),
   };
   try {
     if (!DEMO) await api('/admin/settings', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config }),
     });
-    flash($('sMsg'), true, 'Settings saved.');
+    ok($('sMsg'), 'Settings saved.');
     $('consTitle').textContent = config.name + ' — console';
-  } catch (err) { flash($('sMsg'), false, err.message); }
+  } catch (e) { err($('sMsg'), e.message); }
 };
 
 // boot
 if (KEY) signIn(KEY).catch(signOut);
-else if (DEMO) { /* show login; any key works in preview */ }
 </script>
 </body>
 </html>
