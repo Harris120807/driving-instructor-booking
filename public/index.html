@@ -154,13 +154,18 @@
   <div class="card">
     <h2>3 · Your details</h2>
     <form id="bookForm">
-      <div class="row2">
-        <div><label for="fName">Full name</label><input id="fName" required maxlength="100" autocomplete="name"></div>
-        <div><label for="fEmail">Email</label><input id="fEmail" type="email" required maxlength="200" autocomplete="email"></div>
+      <p class="muted" id="bookAs" style="display:none"></p>
+      <div class="row2" id="rowNameEmail">
+        <div><label for="fName">Full name</label><input id="fName" maxlength="100" autocomplete="name"></div>
+        <div><label for="fEmail">Email</label><input id="fEmail" type="email" maxlength="200" autocomplete="email"></div>
       </div>
       <div class="row2">
-        <div><label for="fPhone">Phone</label><input id="fPhone" type="tel" required autocomplete="tel"></div>
+        <div id="phoneWrap"><label for="fPhone">Phone</label><input id="fPhone" type="tel" autocomplete="tel"></div>
+        <div><label for="fHouse">Pickup house number / name</label><input id="fHouse" maxlength="30" placeholder="e.g. 12 or Rose Cottage"></div>
+      </div>
+      <div class="row2">
         <div><label for="fPostcode">Pickup postcode</label><input id="fPostcode" required maxlength="10" placeholder="e.g. LS1 4AB" autocomplete="postal-code"></div>
+        <div></div>
       </div>
       <label for="fRepeat">Repeat weekly?</label>
       <select id="fRepeat">
@@ -372,12 +377,19 @@ $('fRepeat').addEventListener('change', renderTimes);
 $('bookForm').addEventListener('submit', async e => {
   e.preventDefault();
   const msg = $('msg'); msg.className = 'msg';
+  const signedIn = !!(SESSION && state.portal);
+  if (!signedIn && (!$('fName').value.trim() || !$('fEmail').value.trim() || !$('fPhone').value.trim())) {
+    msg.className = 'msg err';
+    msg.textContent = 'Please fill in your name, email and phone (or sign in below to skip them).';
+    return;
+  }
   $('submitBtn').disabled = true;
   const body = {
     date: state.date, time: state.time, duration: state.duration,
     repeat_weeks: parseInt($('fRepeat').value, 10),
     name: $('fName').value.trim(), email: $('fEmail').value.trim(),
     phone: $('fPhone').value.trim(), postcode: $('fPostcode').value.trim(),
+    house: $('fHouse').value.trim(),
     notes: $('fNotes').value.trim(),
   };
   try {
@@ -387,7 +399,9 @@ $('bookForm').addEventListener('submit', async e => {
         booked: [{ date: state.date }], skipped: [] };
     } else {
       j = await api('/api/book', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(signedIn ? { Authorization: 'Bearer ' + SESSION } : {}) },
+        body: JSON.stringify(body),
       });
     }
     msg.className = 'msg ok';
@@ -397,6 +411,7 @@ $('bookForm').addEventListener('submit', async e => {
       ' The instructor will confirm shortly.';
     msg.textContent = text;
     $('bookForm').reset();
+    bookingMode(); // re-apply signed-in prefills after the reset
     state.time = null;
     loadSlots();
   } catch (err) {
@@ -452,14 +467,31 @@ $('meSignOut').onclick = async () => {
   state.portal = null;
   $('portal').style.display = 'none';
   $('authBox').style.display = 'block';
+  bookingMode();
 };
+
+// Site-wide sign-in: a signed-in pupil books without retyping identity fields
+function bookingMode() {
+  const signedIn = !!(SESSION && state.portal);
+  $('rowNameEmail').style.display = signedIn ? 'none' : '';
+  $('phoneWrap').style.display = signedIn ? 'none' : '';
+  const ba = $('bookAs');
+  if (signedIn) {
+    const j = state.portal;
+    ba.style.display = 'block';
+    ba.textContent = `Booking as ${j.name || j.email} (${j.email}) — name and phone come from your account.`;
+    if (!$('fPostcode').value && j.postcode) $('fPostcode').value = j.postcode;
+    if (!$('fHouse').value && j.house) $('fHouse').value = j.house;
+  } else ba.style.display = 'none';
+}
 
 async function loadMe() {
   if (!SESSION) return;
   try {
     let j;
     if (DEMO) {
-      j = { email: 'pupil@example.com', name: 'Sample Pupil', lessons: demoLessons(),
+      j = { email: 'pupil@example.com', name: 'Sample Pupil', postcode: 'LS1 4AB', house: '12',
+        lessons: demoLessons(),
         owed: 44, gross_owed: 44, credit: 20, upcoming_cost: 88, passed: false,
         cancel_notice_hours: CONFIG.cancel_notice_hours, late_cancel_fee: CONFIG.late_cancel_fee };
     } else {
@@ -470,6 +502,7 @@ async function loadMe() {
     }
     state.portal = j;
     renderPortal();
+    bookingMode();
   } catch (err) {
     const m = $('pMsg'); m.className = 'msg err'; m.textContent = err.message;
   }

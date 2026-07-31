@@ -44,6 +44,14 @@ one origin) + D1.
   skip the horizon check (that's the point) but still respect availability —
   unavailable weeks are skipped and reported back. All lessons in a series
   share a `series` id but have individual refs and cancel individually.
+- **Site-wide sign-in**: a signed-in pupil's `/api/book` takes the email from
+  the session; name/phone fall back to their latest booking (the form hides
+  those fields and shows "Booking as …"). Pickup = house number/name +
+  postcode (both required).
+- **Dismiss (×)**: `/admin/hide` removes a row from the console Bookings
+  list ONLY for past or cancelled lessons (upcoming ones must be cancelled
+  first — a hidden active lesson would invisibly block slots). Hidden rows
+  stay in the pupil's account history and in all money math.
 - **Pupil accounts**: email + password (PBKDF2-SHA256 100k, per-user salt;
   90-day bearer sessions stored hashed). There is NO email service on this
   project, so **signup and password reset require a booking reference**

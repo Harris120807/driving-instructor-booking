@@ -87,6 +87,9 @@
   tr.srow:hover td { background: var(--accent-soft); }
   .wk { background: var(--accent); color: #fff; border-radius: 999px; padding: 1px 8px;
     font-size: .75rem; font-weight: 700; white-space: nowrap; }
+  .xbtn { border: 0; background: none; color: var(--muted); font-size: 1.05rem; line-height: 1;
+    cursor: pointer; padding: 2px 7px; border-radius: 6px; margin: 2px; vertical-align: middle; }
+  .xbtn:hover { background: rgba(194,59,59,.12); color: var(--bad); }
   tr.subrow td { border-left: 3px solid var(--accent); background: rgba(26,122,74,.04); }
   .calgrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; min-width: 640px; }
   .calwrap { overflow-x: auto; }
@@ -364,7 +367,7 @@ function demoBookings() {
   const day = off => { const d = new Date(); d.setDate(d.getDate() + off); return d.toISOString().slice(0, 10); };
   const wk = (off, i) => ({ id: 10 + i, ref: 'P3T8W' + i, series: 'S1AB2C', date: day(off), time: '14:30',
     duration_min: 120, price: 88, name: 'Another Pupil', email: 'p2@example.com', phone: '07700 900456',
-    postcode: 'LS6 2AA', notes: '', status: i === 0 ? 'confirmed' : 'pending', cancelled_by: null, fee: 0, paid: 0 });
+    postcode: 'LS6 2AA', house: '7', notes: '', status: i === 0 ? 'confirmed' : 'pending', cancelled_by: null, fee: 0, paid: 0 });
   return [
     { id: 1, ref: 'K7M2XQ', series: null, date: day(2), time: '10:00', duration_min: 60, price: 44,
       name: 'Sample Pupil', email: 'pupil@example.com', phone: '07700 900123',
@@ -392,6 +395,7 @@ function demoStudents() {
 // --- bookings ---
 let bookingsFilter = '';
 const expandedSeries = new Set();
+const demoHidden = new Set();
 $('statusFilters').addEventListener('click', e => {
   const c = e.target.closest('.chip'); if (!c) return;
   bookingsFilter = c.dataset.status;
@@ -402,7 +406,7 @@ $('statusFilters').addEventListener('click', e => {
 async function loadBookings() {
   let rows;
   if (DEMO) {
-    rows = demoBookings().filter(b => !bookingsFilter || b.status === bookingsFilter);
+    rows = demoBookings().filter(b => (!bookingsFilter || b.status === bookingsFilter) && !demoHidden.has(b.ref));
   } else {
     try {
       rows = (await api('/admin/bookings' + (bookingsFilter ? '?status=' + bookingsFilter : ''))).bookings;
@@ -432,7 +436,7 @@ async function loadBookings() {
       `<td>${b0.duration_min}min</td>` +
       `<td>${esc(b0.name)}${b0.notes ? `<br><span class="muted">${esc(b0.notes)}</span>` : ''}</td>` +
       `<td>${esc(b0.phone)}<br><span class="muted">${esc(b0.email)}</span></td>` +
-      `<td>${esc(b0.postcode)}</td>` +
+      `<td>${esc((b0.house ? b0.house + ' ' : '') + b0.postcode)}</td>` +
       `<td>${fmtMoney(b0.price)}/wk</td>` +
       `<td>${Object.entries(counts).map(([s, n]) => `<span class="st ${s}">${n} ${s}</span>`).join('<br>')}</td>` +
       `<td></td>`;
@@ -449,6 +453,7 @@ async function loadBookings() {
       r => r.status === 'pending'));
     if ((counts.pending || 0) + (counts.confirmed || 0) > 0) actions.appendChild(seriesBtn('Cancel all', 'cancelled', g,
       r => r.status !== 'cancelled', true));
+    if (g.rows.every(dismissible)) actions.appendChild(xBtn(g.rows));
     tb.appendChild(tr);
 
     if (expandedSeries.has(g.series)) {
@@ -469,14 +474,43 @@ function bookingRow(b, compact) {
     (compact ? '<td colspan="3" class="muted">↻ part of the weekly series</td>'
       : `<td>${esc(b.name)}${b.notes ? `<br><span class="muted">${esc(b.notes)}</span>` : ''}</td>` +
         `<td>${esc(b.phone)}<br><span class="muted">${esc(b.email)}</span></td>` +
-        `<td>${esc(b.postcode)}</td>`) +
+        `<td>${esc((b.house ? b.house + ' ' : '') + b.postcode)}</td>`) +
     `<td>${fmtMoney(b.price)}${b.fee > 0 ? `<br><span class="owed">fee ${fmtMoney(b.fee)}</span>` : ''}</td>` +
     `<td><span class="st ${b.status}">${b.status}${b.cancelled_by === 'instructor' ? ' (you)' : ''}</span><br><span class="muted">${b.ref}</span></td>` +
     `<td></td>`;
   const actions = tr.lastElementChild;
   if (b.status === 'pending') actions.append(actBtn('Confirm', 'confirmed', b));
   if (b.status !== 'cancelled') actions.append(actBtn('Cancel', 'cancelled', b, true));
+  if (dismissible(b)) actions.append(xBtn([b]));
   return tr;
+}
+
+const dismissible = b => b.status === 'cancelled' ||
+  (b.date + ' ' + b.time) < new Date().toLocaleString('sv-SE', { timeZone: 'Europe/London' }).slice(0, 16);
+
+// Small ×: dismiss row(s) from this list (kept in the pupil's account history)
+function xBtn(rows) {
+  const btn = document.createElement('button');
+  btn.className = 'xbtn';
+  btn.textContent = '×';
+  btn.title = rows.length > 1
+    ? 'Remove this whole series from the list (kept in the pupil’s account history)'
+    : 'Remove from this list (kept in the pupil’s account history)';
+  btn.onclick = async e => {
+    e.stopPropagation();
+    try {
+      for (const r of rows) {
+        if (!DEMO) await api('/admin/hide', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: r.id }),
+        });
+        else demoHidden.add(r.ref);
+      }
+      ok($('bMsg'), (rows.length > 1 ? 'Series removed' : 'Removed') + ' from the list. Still in the pupil’s account history.');
+      loadBookings();
+    } catch (e2) { err($('bMsg'), e2.message); }
+  };
+  return btn;
 }
 
 function seriesBtn(label, action, g, filter, danger) {
@@ -549,7 +583,7 @@ async function loadStudents() {
     const tr = document.createElement('tr');
     tr.className = 'srow';
     tr.innerHTML =
-      `<td><b>${esc(s.name)}</b>${s.has_notes ? ' 📝' : ''}<br><span class="muted">${esc(s.postcode)}</span></td>` +
+      `<td><b>${esc(s.name)}</b>${s.has_notes ? ' 📝' : ''}<br><span class="muted">${esc((s.house ? s.house + ' ' : '') + s.postcode)}</span></td>` +
       `<td>${esc(s.phone)}<br><span class="muted">${esc(s.email)}</span></td>` +
       `<td>${s.lessons}</td><td>${s.upcoming}</td><td>${fmtMoney(s.upcoming_cost)}</td>` +
       `<td>${fmtMoney(s.credit)}</td>` +
@@ -717,7 +751,7 @@ async function loadCalendar() {
       const c = document.createElement('span');
       c.className = 'calchip ' + b.status;
       c.textContent = `${b.time} ${b.name.split(' ')[0]}${b.series ? ' ↻' : ''}`;
-      c.title = `${b.time} · ${b.duration_min} min · ${b.name} (${b.postcode})` +
+      c.title = `${b.time} · ${b.duration_min} min · ${b.name} (${(b.house ? b.house + ' ' : '') + b.postcode})` +
         `${b.series ? ' · weekly' : ''} · ${b.status}${b.notes ? `\n${b.notes}` : ''}`;
       cell.appendChild(c);
     }

@@ -270,8 +270,10 @@ async function accountFor(env, email) {
     upcoming += upcomingCostOf(now, r);
     return { ...publicLesson(r), past: lessonPast(now, r) };
   });
+  const lastRow = rows.length ? rows[rows.length - 1] : null;
   return {
-    name: rows.length ? rows[rows.length - 1].name : '',
+    name: lastRow ? lastRow.name : '',
+    postcode: lastRow ? lastRow.postcode : '', house: lastRow ? (lastRow.house || '') : '',
     lessons, gross_owed: gross, credit: meta.credit || 0,
     owed: Math.max(0, gross - (meta.credit || 0)),
     upcoming_cost: upcoming, passed: !!meta.passed, meta,
@@ -343,10 +345,29 @@ export default {
 
         if (!RE_DATE.test(date || '') || !RE_TIME.test(time || '')) return json({ error: 'Invalid slot.' }, 400);
         if (!DURATIONS.includes(duration)) return json({ error: 'Invalid duration.' }, 400);
-        if (!b.name || String(b.name).trim().length < 2 || String(b.name).length > 100) return json({ error: 'Please give your name.' }, 400);
-        if (!RE_EMAIL.test(b.email || '') || String(b.email).length > 200) return json({ error: 'Please give a valid email.' }, 400);
-        if (!RE_PHONE.test(b.phone || '')) return json({ error: 'Please give a valid phone number.' }, 400);
         if (!RE_UK_POSTCODE.test(b.postcode || '')) return json({ error: 'Please give a valid UK pickup postcode.' }, 400);
+        const house = String(b.house || '').trim().slice(0, 30);
+        if (!house) return json({ error: 'Please give your house number or name.' }, 400);
+
+        // Signed-in pupils book against their account: email comes from the
+        // session and name/phone fall back to their latest booking
+        const sessEmail = await sessionEmail(req, env);
+        let bkName = String(b.name || '').trim(), bkEmail, bkPhone = String(b.phone || '').trim();
+        if (sessEmail) {
+          bkEmail = sessEmail;
+          if (!bkName || !bkPhone) {
+            const prev = await env.DB.prepare(
+              'SELECT name, phone FROM bookings WHERE email = ? ORDER BY created_at DESC LIMIT 1'
+            ).bind(bkEmail).first();
+            bkName = bkName || prev?.name || '';
+            bkPhone = bkPhone || prev?.phone || '';
+          }
+        } else {
+          bkEmail = String(b.email || '').trim();
+          if (!RE_EMAIL.test(bkEmail) || bkEmail.length > 200) return json({ error: 'Please give a valid email.' }, 400);
+        }
+        if (bkName.length < 2 || bkName.length > 100) return json({ error: 'Please give your name.' }, 400);
+        if (!RE_PHONE.test(bkPhone)) return json({ error: 'Please give a valid phone number.' }, 400);
 
         // First lesson must be a genuinely open slot (notice + horizon enforced)
         const open = await openSlots(env, date, date, duration);
@@ -355,8 +376,8 @@ export default {
 
         const config = await getSetting(env, 'config', DEFAULT_CONFIG);
         const price = config.prices[duration];
-        const name = String(b.name).trim(), email = String(b.email).trim().toLowerCase();
-        const phone = String(b.phone).trim(), postcode = String(b.postcode).trim().toUpperCase();
+        const name = bkName, email = bkEmail.toLowerCase();
+        const phone = bkPhone, postcode = String(b.postcode).trim().toUpperCase();
         const series = repeatWeeks > 1 ? newRef() : null;
         const nowSec = Math.floor(Date.now() / 1000);
 
@@ -370,15 +391,15 @@ export default {
           }
           const ref = newRef();
           await env.DB.prepare(
-            `INSERT INTO bookings (ref, series, date, time, duration_min, price, name, email, phone, postcode, notes, status, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
-          ).bind(ref, series, d, time, duration, price, name, email, phone, postcode, notes, nowSec).run();
+            `INSERT INTO bookings (ref, series, date, time, duration_min, price, name, email, phone, postcode, house, notes, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
+          ).bind(ref, series, d, time, duration, price, name, email, phone, postcode, house, notes, nowSec).run();
           booked.push({ date: d, ref });
         }
 
         notify(env, ctx, repeatWeeks > 1 ? `New weekly lesson request (${booked.length}×)` : 'New lesson request',
           `${date} ${time} (${duration} min${repeatWeeks > 1 ? `, weekly ×${booked.length}` : ''})\n` +
-          `${name} — ${postcode}\nRef ${booked[0].ref}${skipped.length ? `\nSkipped (unavailable): ${skipped.join(', ')}` : ''}`);
+          `${name} — ${house} ${postcode}\nRef ${booked[0].ref}${skipped.length ? `\nSkipped (unavailable): ${skipped.join(', ')}` : ''}`);
 
         return json({
           ok: true, ref: booked[0].ref, series, status: 'pending',
@@ -446,7 +467,8 @@ export default {
           const acc = await accountFor(env, email);
           const config = await getSetting(env, 'config', DEFAULT_CONFIG);
           return json({
-            email, name: acc.name, lessons: acc.lessons,
+            email, name: acc.name, postcode: acc.postcode, house: acc.house,
+            lessons: acc.lessons,
             owed: acc.owed, gross_owed: acc.gross_owed, credit: acc.credit,
             upcoming_cost: acc.upcoming_cost, passed: acc.passed,
             cancel_notice_hours: config.cancel_notice_hours, late_cancel_fee: config.late_cancel_fee,
@@ -483,9 +505,22 @@ export default {
         if (path === '/admin/bookings' && req.method === 'GET') {
           const status = url.searchParams.get('status');
           const q = status
-            ? env.DB.prepare('SELECT * FROM bookings WHERE status = ? ORDER BY date, time LIMIT 500').bind(status)
-            : env.DB.prepare("SELECT * FROM bookings WHERE date >= date('now', '-7 day') ORDER BY date, time LIMIT 500");
+            ? env.DB.prepare('SELECT * FROM bookings WHERE status = ? AND hidden = 0 ORDER BY date, time LIMIT 500').bind(status)
+            : env.DB.prepare("SELECT * FROM bookings WHERE date >= date('now', '-7 day') AND hidden = 0 ORDER BY date, time LIMIT 500");
           return json({ bookings: (await q.all()).results });
+        }
+
+        // Dismiss a row from the bookings list (kept in the pupil's account
+        // history and in the money math) — only for past or cancelled lessons
+        if (path === '/admin/hide' && req.method === 'POST') {
+          const b = await readBody(req);
+          if (!b || !Number.isInteger(b.id)) return json({ error: 'bad request' }, 400);
+          const row = await env.DB.prepare('SELECT * FROM bookings WHERE id = ?').bind(b.id).first();
+          if (!row) return json({ error: 'not found' }, 404);
+          if (row.status !== 'cancelled' && !lessonPast(ukNowParts(), row))
+            return json({ error: 'This lesson is still upcoming — cancel it first, then remove it.' }, 409);
+          await env.DB.prepare('UPDATE bookings SET hidden = 1 WHERE id = ?').bind(b.id).run();
+          return json({ ok: true });
         }
 
         // Month/range view: bookings (all statuses) + blocked-out dates
@@ -494,7 +529,7 @@ export default {
           if (!RE_DATE.test(from || '') || !RE_DATE.test(to || '') || daysBetween(from, to) > 62)
             return json({ error: 'bad params' }, 400);
           const bookings = (await env.DB.prepare(
-            'SELECT * FROM bookings WHERE date >= ? AND date <= ? ORDER BY date, time'
+            'SELECT * FROM bookings WHERE date >= ? AND date <= ? AND hidden = 0 ORDER BY date, time'
           ).bind(from, to).all()).results;
           return json({ bookings, blocked: [...await blockedDates(env, from, to)] });
         }
@@ -536,7 +571,7 @@ export default {
               lessons: 0, upcoming: 0, cancelled: 0, gross_owed: 0, upcoming_cost: 0,
             };
             // Latest booking wins for contact details
-            s.name = r.name; s.phone = r.phone; s.postcode = r.postcode;
+            s.name = r.name; s.phone = r.phone; s.postcode = r.postcode; s.house = r.house || '';
             if (r.status !== 'cancelled') {
               s.lessons++;
               if (!lessonPast(now, r)) { s.upcoming++; s.upcoming_cost += r.price; }

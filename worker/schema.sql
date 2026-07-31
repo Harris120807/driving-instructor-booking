@@ -23,13 +23,17 @@ CREATE TABLE IF NOT EXISTS bookings (
   email        TEXT NOT NULL,                 -- stored lowercased
   phone        TEXT NOT NULL,
   postcode     TEXT NOT NULL,                 -- pickup postcode
+  house        TEXT NOT NULL DEFAULT '',      -- pickup house number/name
   notes        TEXT DEFAULT '',
   status       TEXT NOT NULL DEFAULT 'pending', -- pending | confirmed | cancelled
   cancelled_by TEXT,                          -- 'student' | 'instructor' (null unless cancelled)
   fee          REAL NOT NULL DEFAULT 0,       -- late-cancellation fee owed (£)
   paid         INTEGER NOT NULL DEFAULT 0,    -- 1 = lesson price (or fee, if cancelled) settled
+  hidden       INTEGER NOT NULL DEFAULT 0,    -- 1 = dismissed from the console bookings list
   created_at   INTEGER NOT NULL               -- epoch seconds
 );
+-- Existing deployments: ALTER TABLE bookings ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
+--                       ALTER TABLE bookings ADD COLUMN house TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings(date, status);
 CREATE INDEX IF NOT EXISTS idx_bookings_email ON bookings(email);
