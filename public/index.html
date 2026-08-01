@@ -2,7 +2,8 @@
 <html lang="en-GB">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#1a7a4a">
 <title>Book a Driving Lesson</title>
 <meta name="description" content="Book manual driving lessons online — see live availability and reserve your slot.">
 <style>
@@ -100,6 +101,27 @@
   .demo-note {
     background: rgba(237,161,0,.14); border-radius: 8px; padding: 8px 12px;
     font-size: .82rem; margin-bottom: 14px; display: none;
+  }
+  button, .day, .time { touch-action: manipulation; }
+  input, select, textarea { font-size: 16px; } /* <16px triggers iOS focus zoom */
+  @media (max-width: 600px) {
+    .wrap { padding: 10px 10px calc(50px + env(safe-area-inset-bottom)); }
+    header.hero { padding: 20px 16px; border-radius: 12px; }
+    header.hero h1 { font-size: 1.35rem; }
+    .badge { font-size: .78rem; padding: 3px 10px; }
+    .card { padding: 14px 12px; border-radius: 10px; }
+    .card h2 { font-size: 1.05rem; }
+    .day { flex: 0 0 66px; padding: 10px 4px; }
+    .time { padding: 11px 15px; }
+    th, td { padding: 6px 6px; font-size: .84rem; white-space: nowrap; }
+    .totals { gap: 8px; }
+    .tot { flex: 1 1 100px; padding: 10px; }
+    .tot .v { font-size: 1.15rem; }
+    .btn { width: 100%; padding: 13px 20px; }
+    .btn.sm { width: auto; padding: 8px 14px; }
+    .seg { display: flex; width: 100%; }
+    .seg button { flex: 1; padding: 10px 4px; font-size: .85rem; }
+    .topline { font-size: .9rem; }
   }
   table { width: 100%; border-collapse: collapse; font-size: .9rem; }
   th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }

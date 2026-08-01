@@ -2,7 +2,8 @@
 <html lang="en-GB">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#1a7a4a">
 <title>Instructor Console</title>
 <meta name="robots" content="noindex">
 <style>
@@ -65,7 +66,8 @@
   .msg.warn { display: block; background: rgba(176,125,16,.14); color: var(--warn); }
   #login { max-width: 380px; margin: 80px auto; }
   #console { display: none; }
-  .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;
+    position: sticky; top: 0; z-index: 5; background: var(--page); padding: 8px 0; }
   .tab { border: 1.5px solid var(--border); background: none; border-radius: 999px;
     padding: 6px 16px; cursor: pointer; }
   .tab.sel { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -96,7 +98,7 @@
   .calday { border: 1px solid var(--border); border-radius: 8px; min-height: 86px;
     padding: 4px; font-size: .75rem; overflow: hidden; }
   .calday.blocked { background: rgba(194,59,59,.08); }
-  .calday.empty { border: none; }
+  .calday.empty { border: none; min-height: 0; }
   .calday.today { border: 2px solid var(--accent); }
   .calday .dn { font-weight: 700; margin-bottom: 2px; }
   .calchip { display: block; border-radius: 5px; padding: 1px 4px; margin-bottom: 2px;
@@ -109,6 +111,24 @@
   .calchip.confirmed { background: var(--accent-soft); color: var(--good); }
   .calchip.pending { background: rgba(176,125,16,.15); color: var(--warn); }
   .calchip.cancelled { background: rgba(194,59,59,.12); color: var(--bad); text-decoration: line-through; }
+  button { touch-action: manipulation; }
+  @media (max-width: 600px) {
+    .wrap { padding: 6px 10px calc(30px + env(safe-area-inset-bottom)); }
+    h1 { font-size: 1.1rem; }
+    .card { padding: 12px 10px; border-radius: 10px; }
+    input, select, textarea { font-size: 16px; } /* <16px triggers iOS focus zoom */
+    .btn { padding: 11px 16px; }
+    .btn.sm { padding: 8px 12px; }
+    .pp { padding: 5px 12px; }
+    .xbtn { padding: 6px 10px; font-size: 1.2rem; }
+    th, td { padding: 6px 5px; font-size: .82rem; }
+    .tab { padding: 9px 13px; font-size: .88rem; }
+    #login { margin: 40px auto; }
+    .dayrow input[type=time] { width: 100px; }
+    .cdgrid { grid-template-columns: 1fr; gap: 2px; }
+    .cdgrid dt { margin-top: 8px; }
+    .filters .chip { padding: 7px 13px; }
+  }
 </style>
 </head>
 <body>
