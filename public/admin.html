@@ -131,6 +131,13 @@
   .calchip.confirmed { background: var(--accent-soft); color: var(--good); }
   .calchip.pending { background: rgba(176,125,16,.15); color: var(--warn); }
   .calchip.cancelled { background: rgba(194,59,59,.12); color: var(--bad); text-decoration: line-through; }
+  .acwrap { position: relative; }
+  .acdrop { position: absolute; top: 100%; left: 0; right: 0; z-index: 30; background: var(--card);
+    border: 1.5px solid var(--border); border-radius: 8px; margin-top: 2px; max-height: 224px;
+    overflow-y: auto; box-shadow: 0 6px 18px rgba(0,0,0,.14); display: none; }
+  .acopt { padding: 11px 12px; cursor: pointer; border-bottom: 1px solid var(--border); }
+  .acopt:last-child { border-bottom: none; }
+  .acopt:hover { background: var(--accent-soft); }
   button { touch-action: manipulation; }
   @media (max-width: 600px) {
     .wrap { padding: 6px 10px calc(30px + env(safe-area-inset-bottom)); }
@@ -193,9 +200,9 @@
         <p class="muted">For pupils who ring or text you. Books at <b>any</b> time — outside your usual hours, inside the notice window, even in the past to record an old lesson. Only a clash with an existing lesson is blocked. If you don't know their email, leave it blank — their lessons still group under one pupil by phone number.</p>
         <div class="grid">
           <div>
-            <div class="field"><label for="abName">Pupil name (existing pupils autocomplete)</label>
-              <input id="abName" list="pupilList" maxlength="100" style="width:100%"></div>
-            <datalist id="pupilList"></datalist>
+            <div class="field acwrap"><label for="abName">Pupil name (existing pupils autocomplete)</label>
+              <input id="abName" maxlength="100" style="width:100%" autocomplete="off">
+              <div class="acdrop" id="pupilDrop"></div></div>
             <div class="field"><label for="abPhone">Phone</label><input id="abPhone" style="width:100%"></div>
             <div class="field"><label for="abEmail">Email (optional)</label><input id="abEmail" type="email" style="width:100%"></div>
             <div class="ovrow">
@@ -712,15 +719,40 @@ document.querySelectorAll('[data-abstatus]').forEach(c => c.onclick = () => {
     : 'Provisional — sits in your Pending list until you confirm it with the pupil.';
 });
 
-// Autofill contact fields when an existing pupil is picked from the datalist
-$('abName').addEventListener('change', () => {
-  const s = STUDENTS.find(x => x.name === $('abName').value.trim());
-  if (!s) return;
+// Custom pupil autocomplete (native datalist misbehaves on mobile — the
+// suggestion list vanishes when the keyboard opens)
+function showPupilAc() {
+  const drop = $('pupilDrop');
+  const q = $('abName').value.trim().toLowerCase();
+  const qd = q.replace(/\s/g, '');
+  const matches = STUDENTS.filter(s =>
+    !q || s.name.toLowerCase().includes(q) ||
+    String(s.phone || '').replace(/\s/g, '').includes(qd)).slice(0, 6);
+  drop.innerHTML = '';
+  if (!matches.length) { drop.style.display = 'none'; return; }
+  for (const s of matches) {
+    const o = document.createElement('div');
+    o.className = 'acopt';
+    o.innerHTML = `<b>${esc(s.name)}</b> <span class="muted">${esc(s.phone || '')}</span>`;
+    // pointerdown (not click) so the pick lands before the input's blur hides the list
+    o.onpointerdown = e => { e.preventDefault(); pickPupil(s); };
+    drop.appendChild(o);
+  }
+  drop.style.display = 'block';
+}
+
+function pickPupil(s) {
+  $('abName').value = s.name;
   $('abPhone').value = s.phone || '';
   $('abEmail').value = s.email.endsWith('@phone.local') ? '' : s.email;
   $('abHouse').value = s.house || '';
   $('abPostcode').value = s.postcode || '';
-});
+  $('pupilDrop').style.display = 'none';
+}
+
+$('abName').addEventListener('input', showPupilAc);
+$('abName').addEventListener('focus', showPupilAc);
+$('abName').addEventListener('blur', () => setTimeout(() => { $('pupilDrop').style.display = 'none'; }, 150));
 
 $('abGo').onclick = async () => {
   const body = {
@@ -765,10 +797,7 @@ async function loadStudents() {
     try { students = (await api('/admin/students' + (passedFilter ? '?passed=1' : ''))).students; }
     catch (e) { $('studentsBody').innerHTML = `<tr><td colspan="8" class="muted">${esc(e.message)}</td></tr>`; return; }
   }
-  if (!passedFilter) {
-    STUDENTS = students;
-    $('pupilList').innerHTML = students.map(s => `<option value="${esc(s.name)}">`).join('');
-  }
+  if (!passedFilter) STUDENTS = students;
   const tb = $('studentsBody'); tb.innerHTML = '';
   if (!students.length) {
     tb.innerHTML = `<tr><td colspan="8" class="muted">${passedFilter ? 'Nobody marked as passed yet.' : 'No pupils yet.'}</td></tr>`;
