@@ -106,21 +106,23 @@
   .wkblock { position: absolute; left: 2px; right: 2px; border-radius: 5px; padding: 1px 4px;
     font-size: .68rem; overflow: hidden; cursor: pointer; border: 1px solid transparent; }
   .wkblock:hover { border-color: currentColor; }
-  .wkblock.confirmed, .wkhblock.confirmed { background: var(--accent-soft); color: var(--good); }
-  .wkblock.pending, .wkhblock.pending { background: rgba(176,125,16,.18); color: var(--warn); }
-  .wkblock.cancelled, .wkhblock.cancelled { background: rgba(194,59,59,.12); color: var(--bad); text-decoration: line-through; }
-  /* Phone week view: days as horizontal rows, time running left→right */
-  .wkrows { display: block; }
-  .wkhourbar { position: relative; height: 15px; margin-left: 58px; margin-bottom: 3px;
-    font-size: .65rem; color: var(--muted); }
-  .wkhourbar span { position: absolute; transform: translateX(-50%); }
-  .wkrow { display: flex; align-items: stretch; gap: 6px; margin-bottom: 6px; }
-  .wkrow .wkday { flex: 0 0 52px; font-size: .75rem; color: var(--muted); padding-top: 12px; }
-  .wkrow.today .wkday { color: var(--accent); font-weight: 700; }
-  .wktrack { position: relative; flex: 1; height: 46px; border: 1px solid var(--border); border-radius: 8px; }
-  .wktrack.blocked { background: rgba(194,59,59,.08); }
-  .wkhblock { position: absolute; top: 2px; bottom: 2px; border-radius: 5px; font-size: .65rem;
-    padding: 2px 3px; overflow: hidden; cursor: pointer; white-space: nowrap; }
+  .wkblock.confirmed { background: var(--accent-soft); color: var(--good); }
+  .wkblock.pending { background: rgba(176,125,16,.18); color: var(--warn); }
+  .wkblock.cancelled { background: rgba(194,59,59,.12); color: var(--bad); text-decoration: line-through; }
+  /* Phone week view: agenda — a section per day, full-width tappable lesson rows */
+  .wkagenda { display: block; }
+  .agday { margin-bottom: 12px; }
+  .agh { font-size: .82rem; font-weight: 700; color: var(--muted); margin-bottom: 5px; }
+  .agday.today .agh { color: var(--accent); }
+  .agoff { color: var(--bad); font-weight: 600; }
+  .agrow { display: flex; align-items: center; gap: 9px; border: 1.5px solid var(--border);
+    border-left-width: 4px; border-radius: 8px; padding: 10px 11px; margin-bottom: 5px; cursor: pointer; }
+  .agrow.confirmed { border-left-color: var(--good); }
+  .agrow.pending { border-left-color: var(--warn); background: rgba(176,125,16,.05); }
+  .agrow.cancelled { border-left-color: var(--bad); opacity: .55; }
+  .agrow .t { font-weight: 700; white-space: nowrap; }
+  .agrow .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agempty { color: var(--muted); font-size: .8rem; padding-left: 2px; }
   .xbtn { border: 0; background: none; color: var(--muted); font-size: 1.05rem; line-height: 1;
     cursor: pointer; padding: 2px 7px; border-radius: 6px; margin: 2px; vertical-align: middle; }
   .xbtn:hover { background: rgba(194,59,59,.12); color: var(--bad); }
@@ -1003,42 +1005,37 @@ async function loadWeek() {
   const wk = $('wkBody'); wk.innerHTML = '';
   const toM2 = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
 
-  // Phones: transpose — a row per day, time running left→right, all 7 visible
+  // Phones: agenda layout — a section per day, full-width rows with pupil names
   if (window.innerWidth < 700) {
-    wk.className = 'wkrows';
-    const span = WK_END - WK_START;
-    const bar = document.createElement('div');
-    bar.className = 'wkhourbar';
-    for (let h = 7; h <= 19; h += 3) {
-      const s = document.createElement('span');
-      s.style.left = ((h * 60 - WK_START) / span * 100) + '%';
-      s.textContent = String(h).padStart(2, '0');
-      bar.appendChild(s);
-    }
-    wk.appendChild(bar);
+    wk.className = 'wkagenda';
+    const toHM2 = m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
     for (const ds of days) {
-      const row = document.createElement('div');
-      row.className = 'wkrow' + (ds === today ? ' today' : '');
-      const lab = document.createElement('div');
-      lab.className = 'wkday';
-      lab.textContent = new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' });
-      row.appendChild(lab);
-      const track = document.createElement('div');
-      track.className = 'wktrack' + (blocked.has(ds) ? ' blocked' : '');
-      for (const b of byDate[ds] || []) {
-        const blk = document.createElement('div');
-        blk.className = 'wkhblock ' + b.status;
-        const widthPct = Math.max(6, b.duration_min / span * 100);
-        blk.style.left = Math.max(0, (toM2(b.time) - WK_START) / span * 100) + '%';
-        blk.style.width = widthPct + '%';
-        // too narrow to read = colour only; tap opens the detail card
-        blk.textContent = widthPct >= 16 ? `${b.time} ${b.name.split(' ')[0]}` : (widthPct >= 9 ? b.time : '');
-        blk.title = 'Tap for details';
-        blk.onclick = () => showCalDetail(b);
-        track.appendChild(blk);
+      const sec = document.createElement('div');
+      sec.className = 'agday' + (ds === today ? ' today' : '');
+      const head = document.createElement('div');
+      head.className = 'agh';
+      head.innerHTML = new Date(ds + 'T12:00:00').toLocaleDateString('en-GB',
+        { weekday: 'long', day: 'numeric', month: 'short' }) +
+        (blocked.has(ds) ? ' <span class="agoff">· time off</span>' : '');
+      sec.appendChild(head);
+      const lessons = (byDate[ds] || []).slice().sort((a, b) => a.time < b.time ? -1 : 1);
+      if (!lessons.length) {
+        const e = document.createElement('div');
+        e.className = 'agempty';
+        e.textContent = blocked.has(ds) ? 'Blocked out' : 'No lessons';
+        sec.appendChild(e);
       }
-      row.appendChild(track);
-      wk.appendChild(row);
+      for (const b of lessons) {
+        const row = document.createElement('div');
+        row.className = 'agrow ' + b.status;
+        row.innerHTML =
+          `<span class="t">${b.time}–${toHM2(toM2(b.time) + b.duration_min)}</span>` +
+          `<span class="n">${esc(b.name)}${b.series ? ' ↻' : ''}</span>` +
+          `<span class="st ${b.status}">${b.status}</span>`;
+        row.onclick = () => showCalDetail(b);
+        sec.appendChild(row);
+      }
+      wk.appendChild(sec);
     }
     return;
   }
