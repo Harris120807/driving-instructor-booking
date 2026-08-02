@@ -235,6 +235,79 @@ function notify(env, ctx, title, body) {
   }).catch(() => {}));
 }
 
+// --- pupil notifications (email/SMS) ---------------------------------------
+// Both channels are optional and activate when their secrets exist:
+//   email: RESEND_API_KEY + MAIL_FROM (e.g. "Driving School <lessons@domain>")
+//   SMS:   TWILIO_SID + TWILIO_TOKEN + TWILIO_FROM (E.164 or UK alpha sender)
+// Missing secrets = channel silently skipped; a send failure never breaks the
+// request that triggered it.
+
+function ukE164(phone) {
+  const p = String(phone || '').replace(/[^\d+]/g, '');
+  if (p.startsWith('+')) return /^\+\d{10,14}$/.test(p) ? p : null;
+  if (p.startsWith('07') && p.length === 11) return '+44' + p.slice(1);
+  if (p.startsWith('447') && p.length === 12) return '+' + p;
+  return null;
+}
+
+function prettyDate(dateStr) {
+  return new Date(dateStr + 'T12:00:00Z').toLocaleDateString('en-GB',
+    { weekday: 'long', day: 'numeric', month: 'long' });
+}
+
+function sendEmail(env, ctx, to, subject, text) {
+  if (!env.RESEND_API_KEY || !env.MAIL_FROM) return;
+  ctx.waitUntil(fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: env.MAIL_FROM, to, subject, text }),
+  }).catch(() => {}));
+}
+
+function sendSms(env, ctx, phone, text) {
+  if (!env.TWILIO_SID || !env.TWILIO_TOKEN || !env.TWILIO_FROM) return;
+  const to = ukE164(phone);
+  if (!to) return;
+  ctx.waitUntil(fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Basic ' + btoa(`${env.TWILIO_SID}:${env.TWILIO_TOKEN}`),
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({ From: env.TWILIO_FROM, To: to, Body: text }),
+  }).catch(() => {}));
+}
+
+// One message per pupil, however many lessons were cancelled in the action
+async function notifyCancelledPupils(env, ctx, rows, origin) {
+  if (!rows.length) return;
+  const config = await getSetting(env, 'config', DEFAULT_CONFIG);
+  const byEmail = new Map();
+  for (const r of rows) {
+    if (!byEmail.has(r.email)) byEmail.set(r.email, []);
+    byEmail.get(r.email).push(r);
+  }
+  const signoff = `${config.name}${config.phone ? ' · ' + config.phone : ''}`;
+  for (const list of byEmail.values()) {
+    const first = list[0];
+    const lines = list.map(r => `${prettyDate(r.date)} at ${r.time}`);
+    const subject = list.length === 1
+      ? `Your driving lesson on ${lines[0]} has been cancelled`
+      : `${list.length} of your driving lessons have been cancelled`;
+    const body =
+      `Hi ${String(first.name).split(' ')[0]},\n\n` +
+      `Sorry — your instructor has had to cancel ${list.length === 1 ? 'your lesson' : 'these lessons'}:\n\n` +
+      lines.map(l => `  • ${l}`).join('\n') + '\n\n' +
+      `You won't be charged for ${list.length === 1 ? 'it' : 'them'}. ` +
+      `To rebook, visit ${origin} — or just reply to your instructor directly.\n\n${signoff}`;
+    sendEmail(env, ctx, first.email, subject, body);
+    sendSms(env, ctx, first.phone,
+      list.length === 1
+        ? `Sorry — your driving lesson on ${lines[0]} has been cancelled (no charge). Rebook: ${origin} — ${signoff}`
+        : `Sorry — ${list.length} of your driving lessons have been cancelled (no charge): ${lines.join('; ')}. Rebook: ${origin} — ${signoff}`);
+  }
+}
+
 // --- money -----------------------------------------------------------------
 
 function lessonPast(now, b) {
@@ -546,17 +619,27 @@ export default {
 
         if (path === '/admin/booking' && req.method === 'POST') {
           const b = await readBody(req);
-          if (!b || !Number.isInteger(b.id) || !['confirmed', 'cancelled', 'pending'].includes(b.action))
+          // Accepts a single id or an ids array (series bulk actions) so a
+          // pupil gets ONE cancellation message however many weeks are cancelled
+          const ids = Array.isArray(b?.ids) ? b.ids.filter(Number.isInteger).slice(0, 50)
+            : (Number.isInteger(b?.id) ? [b.id] : []);
+          if (!ids.length || !['confirmed', 'cancelled', 'pending'].includes(b.action))
             return json({ error: 'bad request' }, 400);
           if (b.action === 'cancelled') {
             // Instructor cancellations never carry a pupil fee
-            await env.DB.prepare(
-              "UPDATE bookings SET status = 'cancelled', cancelled_by = 'instructor', fee = 0 WHERE id = ?"
-            ).bind(b.id).run();
+            const rows = [];
+            for (const id of ids) {
+              const r = await env.DB.prepare('SELECT * FROM bookings WHERE id = ?').bind(id).first();
+              if (r && r.status !== 'cancelled') rows.push(r);
+              await env.DB.prepare(
+                "UPDATE bookings SET status = 'cancelled', cancelled_by = 'instructor', fee = 0 WHERE id = ?"
+              ).bind(id).run();
+            }
+            await notifyCancelledPupils(env, ctx, rows, url.origin);
           } else {
-            await env.DB.prepare(
+            for (const id of ids) await env.DB.prepare(
               'UPDATE bookings SET status = ?, cancelled_by = NULL, fee = 0 WHERE id = ?'
-            ).bind(b.action, b.id).run();
+            ).bind(b.action, id).run();
           }
           return json({ ok: true });
         }
@@ -709,6 +792,7 @@ export default {
             ).bind(start, end).run();
             notify(env, ctx, `Time off blocked — ${hit.length} lesson(s) auto-cancelled`,
               hit.map(h => `${h.date} ${h.time} ${h.name} (${h.phone})`).join('\n'));
+            await notifyCancelledPupils(env, ctx, hit, url.origin);
           }
           return json({ ok: true, cancelled: hit });
         }

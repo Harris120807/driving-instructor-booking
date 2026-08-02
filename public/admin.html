@@ -556,14 +556,13 @@ function seriesBtn(label, action, g, filter, danger) {
     const targets = g.rows.filter(filter);
     if (danger && !confirm(`Cancel ALL ${targets.length} remaining lessons in ${g.rows[0].name}'s weekly series? (No fee for the pupil.)`)) return;
     try {
-      for (const r of targets) {
-        if (!DEMO) await api('/admin/booking', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: r.id, action }),
-        });
-        else r.status = action;
-      }
-      ok($('bMsg'), `${targets.length} lesson(s) → ${action}. Remember to tell the pupil.`);
+      // One batched call → the pupil gets a single notification for the series
+      if (!DEMO) await api('/admin/booking', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: targets.map(r => r.id), action }),
+      });
+      else targets.forEach(r => { r.status = action; });
+      ok($('bMsg'), `${targets.length} lesson(s) → ${action}.`);
       loadBookings(); loadStudents();
     } catch (e) { err($('bMsg'), e.message); }
   };

@@ -31,6 +31,15 @@ one origin) + D1.
     authoritatively on `/api/cancel`.
 - **Instructor cancellations never charge the pupil** (`cancelled_by:
   'instructor'`, fee 0) — including the auto-cancels when time off is blocked.
+- **Pupil cancellation notifications** (email + SMS): every instructor-side
+  cancel (single, series bulk, time-off auto-cancel) triggers ONE message per
+  pupil listing all cancelled dates (`notifyCancelledPupils`). Channels are
+  secret-gated and silently skipped when unconfigured: email = Resend
+  (`RESEND_API_KEY` + `MAIL_FROM`, needs a verified domain on a SEPARATE
+  Resend account — never ValueTally's), SMS = Twilio (`TWILIO_SID` +
+  `TWILIO_TOKEN` + `TWILIO_FROM`; UK numbers normalized to E.164, 07… → +44).
+  `/admin/booking` accepts `{ids: [...]}` for series bulk actions so the
+  pupil isn't messaged once per week. Send failures never break the request.
 - **Blocking time off** takes a start/end date range; all non-cancelled
   lessons inside are auto-cancelled and returned to the console so the
   instructor can contact the pupils (also pushed via ntfy if configured).
