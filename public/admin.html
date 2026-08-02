@@ -451,18 +451,6 @@
             <input id="sPkgMock" type="number" min="0" step="1"></div>
         </div>
         <div class="field"><div class="hint">Shown on the site’s Packages card; used when you accept a package request.</div></div>
-        <h2 style="margin-top:18px">Motorway lessons</h2>
-        <div class="prices3">
-          <div class="field"><label for="sMwLen">Set length</label>
-            <select id="sMwLen">
-              <option value="60">1 hour</option><option value="90">1½ hours</option>
-              <option value="120">2 hours</option><option value="150">2½ hours</option>
-              <option value="180">3 hours</option><option value="240">4 hours</option>
-            </select></div>
-          <div class="field"><label for="sMwPrice">Price (£)</label>
-            <input id="sMwPrice" type="number" min="0" step="1"></div>
-        </div>
-        <div class="field"><div class="hint">Pupils choosing “Motorway lesson” get this fixed length and just pick a slot. Leave the price at 0 to charge your normal rate for that length.</div></div>
         <h2 style="margin-top:18px">Booking rules</h2>
         <div class="field">
           <label for="sNotice">Minimum notice to <b>book</b> (hours)</label>
@@ -1547,8 +1535,6 @@ async function loadSettings() {
   $('sFee').value = c.late_cancel_fee; $('sHorizon').value = c.horizon_days;
   $('sPkgBeg').value = c.pkg_beginner_price ?? 190;
   $('sPkgMock').value = c.pkg_mock_price ?? 95;
-  $('sMwLen').value = String(c.motorway_minutes ?? 120);
-  $('sMwPrice').value = c.motorway_price ?? 0;
   $('consTitle').textContent = c.name + ' — console';
   RATE = parseFloat($('sRate').value) || 44;
   RATE_AUTO = parseFloat($('sRateAuto').value) || 46;
@@ -1564,8 +1550,6 @@ $('saveSettings').onclick = async () => {
     max_duration: parseInt($('sMaxLen').value, 10),
     pkg_beginner_price: parseFloat($('sPkgBeg').value),
     pkg_mock_price: parseFloat($('sPkgMock').value),
-    motorway_minutes: parseInt($('sMwLen').value, 10),
-    motorway_price: parseFloat($('sMwPrice').value),
     notice_hours: parseFloat($('sNotice').value),
     cancel_notice_hours: parseFloat($('sCancelNotice').value),
     late_cancel_fee: parseFloat($('sFee').value),

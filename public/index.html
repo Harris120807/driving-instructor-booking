@@ -278,7 +278,6 @@
         <button type="button" data-type="manual" class="sel">Manual</button>
         <button type="button" data-type="automatic">Automatic</button>
       </div>
-      <button type="button" class="mwbtn" id="mwToggle">Motorway lesson</button>
       <button type="button" class="mwbtn" id="mockToggle">Mock test</button>
     </div>
     <div id="lenWrap" style="margin-top:12px">
@@ -432,17 +431,14 @@ let CONFIG = {
     beginner: { label: 'Beginner Package', minutes: 300, price: 190 },
     mock: { label: 'Mock Test', minutes: 120, price: 95 },
   },
-  motorway: { minutes: 120, price: { manual: 88, automatic: 92 } },
 };
 const state = { duration: 60, type: 'manual', product: 'lesson', date: null, time: null,
   slots: {}, portal: null, portalAuth: null };
 const priceOf = d =>
-  state.product === 'motorway' ? (CONFIG.motorway?.price?.[state.type] ?? 0) :
   state.product === 'mock' ? (CONFIG.packages?.mock?.price ?? 0) :
   (CONFIG.prices[state.type]?.[d] ??
    Math.round((state.type === 'automatic' ? CONFIG.hourly_rate_auto : CONFIG.hourly_rate) * d / 60 * 100) / 100);
-const productMinutes = p => p === 'motorway' ? (CONFIG.motorway?.minutes || 120)
-  : p === 'mock' ? (CONFIG.packages?.mock?.minutes || 120)
+const productMinutes = p => p === 'mock' ? (CONFIG.packages?.mock?.minutes || 120)
   : Math.min(CONFIG.max_duration, Math.max(CONFIG.min_duration, 60));
 
 const fmtLen = m => {
@@ -577,16 +573,12 @@ async function loadConfig() {
 function renderLen() {
   $('lenLabel').textContent = fmtLen(state.duration);
   $('lenPrice').textContent = fmtMoney(priceOf(state.duration));
-  $('lenType').textContent =
-    state.product === 'motorway' ? `${state.type} motorway lesson`
-    : state.product === 'mock' ? 'mock test' : `${state.type} lesson`;
+  $('lenType').textContent = state.product === 'mock' ? 'mock test' : `${state.type} lesson`;
   const fixed = state.product !== 'lesson';
   $('lenWrap').style.display = fixed ? 'none' : '';
   $('mwNote').style.display = fixed ? 'block' : 'none';
-  $('mwNote').textContent = state.product === 'mock'
-    ? 'A mock test is a set length, run like the real thing by a qualified ADI — just pick a day and time below.'
-    : 'Motorway lessons are a set length — just pick a day and time below. For licence holders building post-test confidence.';
-  $('mwToggle').classList.toggle('sel', state.product === 'motorway');
+  $('mwNote').textContent =
+    'A mock test is a set length, run like the real thing by a qualified ADI — just pick a day and time below.';
   $('mockToggle').classList.toggle('sel', state.product === 'mock');
 }
 
@@ -609,7 +601,6 @@ function pickProduct(p) {
   renderLen();
   loadSlots();
 }
-$('mwToggle').addEventListener('click', () => pickProduct('motorway'));
 $('mockToggle').addEventListener('click', () => pickProduct('mock'));
 
 $('lenSlider').addEventListener('input', () => {
@@ -679,7 +670,7 @@ function renderTimes() {
     const d = new Date(state.date + 'T12:00:00');
     const weeks = parseInt($('fRepeat').value, 10);
     s.style.display = 'block';
-    s.textContent = `Selected: ${state.product === 'mock' ? fmtLen(state.duration) + ' mock test' : fmtLen(state.duration) + ' ' + state.type + (state.product === 'motorway' ? ' motorway' : '') + ' lesson'} — ` +
+    s.textContent = `Selected: ${state.product === 'mock' ? fmtLen(state.duration) + ' mock test' : fmtLen(state.duration) + ' ' + state.type + ' lesson'} — ` +
       `${d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })} at ${state.time} · ` +
       `${fmtMoney(priceOf(state.duration))}` +
       (weeks > 1 ? ` per lesson, weekly for ${weeks} weeks` : '');
@@ -703,7 +694,7 @@ $('bookForm').addEventListener('submit', async e => {
   $('submitBtn').disabled = true;
   const body = {
     date: state.date, time: state.time, duration: state.duration,
-    lesson_type: state.type, motorway: state.product === 'motorway', mock: state.product === 'mock',
+    lesson_type: state.type, mock: state.product === 'mock',
     repeat_weeks: parseInt($('fRepeat').value, 10),
     name: $('fName').value.trim(), email: $('fEmail').value.trim(),
     phone: $('fPhone').value.trim(), postcode: $('fPostcode').value.trim(),
