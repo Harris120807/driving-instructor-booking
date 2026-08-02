@@ -225,13 +225,38 @@
 
     <div class="card">
       <h2>Packages</h2>
-      <div class="pkg"><span class="amt">£190</span><b>Beginner Package</b><br>
-        <span class="muted">5 hours — the perfect start for brand-new drivers.</span></div>
-      <div class="pkg"><span class="amt">£95</span><b>Mock Tests</b><br>
-        <span class="muted">2 hours, conducted independently by qualified ADIs.</span></div>
+      <div class="pkg"><span class="amt" id="pkgBegPrice">£190</span><b>Beginner Package</b><br>
+        <span class="muted">5 hours of lesson time — the perfect start for brand-new drivers.</span><br>
+        <button class="btn sm" style="margin-top:8px" data-pkg="beginner" type="button">Request this package</button></div>
+      <div class="pkg"><span class="amt" id="pkgMockPrice">£95</span><b>Mock Tests</b><br>
+        <span class="muted">2 hours, conducted independently by qualified ADIs.</span><br>
+        <button class="btn sm" style="margin-top:8px" data-pkg="mock" type="button">Request a mock test</button></div>
       <div class="pkg"><span class="amt">ask</span><b>Motorway Package</b><br>
         <span class="muted">Designed to build confidence and experience following your practical test, or to extend your driving time.</span></div>
       <button class="btn" data-view="book" type="button">Book a lesson</button>
+    </div>
+
+    <div class="card" id="pkgPanel" style="display:none">
+      <h2 id="pkgTitle">Request package</h2>
+      <p class="muted" id="pkgDesc"></p>
+      <p class="muted" id="pkgAs" style="display:none"></p>
+      <div id="pkgIdentity">
+        <div class="row2">
+          <div><label for="pkName">Full name</label><input id="pkName" maxlength="100" autocomplete="name"></div>
+          <div><label for="pkEmail">Email</label><input id="pkEmail" type="email" maxlength="200" autocomplete="email"></div>
+        </div>
+        <label for="pkPhone">Phone</label><input id="pkPhone" type="tel" autocomplete="tel">
+      </div>
+      <div class="row2">
+        <div><label for="pkHouse">Pickup house number / name</label><input id="pkHouse" maxlength="30"></div>
+        <div><label for="pkPostcode">Pickup postcode</label><input id="pkPostcode" maxlength="10" autocomplete="postal-code"></div>
+      </div>
+      <label for="pkNotes">Anything to add? (optional)</label>
+      <textarea id="pkNotes" rows="2" maxlength="500"></textarea>
+      <button class="btn" id="pkGo" type="button">Send request</button>
+      <button class="btn sm" id="pkClose" type="button" style="margin-left:8px; background:none; color:var(--text); border:1.5px solid var(--border)">Cancel</button>
+      <div class="msg" id="pkMsg"></div>
+      <p class="muted">The instructor reviews every package request and will confirm with you directly — nothing is charged online.</p>
     </div>
   </div>
 
@@ -323,9 +348,11 @@
       <div class="msg ok" id="passedNote" style="display:none"></div>
       <div class="totals">
         <div class="tot owe"><div class="v" id="tOwed">£0</div><div class="l">Money owed</div></div>
-        <div class="tot"><div class="v" id="tCredit">£0</div><div class="l">Lesson credit</div></div>
+        <div class="tot"><div class="v" id="tCredit">£0</div><div class="l">Money credit</div></div>
+        <div class="tot" id="tHoursWrap" style="display:none"><div class="v" id="tHours">0h</div><div class="l">Lesson time credit</div></div>
         <div class="tot"><div class="v" id="tUpcoming">£0</div><div class="l">Upcoming lessons cost</div></div>
       </div>
+      <div class="msg warn" id="chargesLine" style="display:none; margin-bottom:12px"></div>
       <div class="row2" style="align-items:end; margin-bottom:12px">
         <div><label for="tdInput" class="muted" style="font-size:.85rem">My driving test date (optional — your instructor plans around it)</label>
           <input type="date" id="tdInput"></div>
@@ -396,6 +423,53 @@ const fmtLen = m => {
   const h = Math.floor(m / 60), half = m % 60 === 30;
   return (half ? h + '½' : h) + ' hour' + (h === 1 && !half ? '' : 's');
 };
+const fmtH = m => `${Math.floor(m / 60)}${m % 60 === 30 ? '½' : ''}h`;
+
+// --- package requests ---
+let curPkg = null;
+document.querySelectorAll('[data-pkg]').forEach(b => b.addEventListener('click', () => {
+  curPkg = b.dataset.pkg;
+  const info = CONFIG.packages?.[curPkg] || { label: 'Package', price: 0 };
+  $('pkgPanel').style.display = 'block';
+  $('pkgTitle').textContent = `Request the ${info.label}`;
+  $('pkgDesc').textContent = curPkg === 'beginner'
+    ? `£${info.price} for 5 hours of lesson time — once accepted, the hours land on your account and you pay the instructor directly.`
+    : `£${info.price} for a 2-hour mock test with an independent ADI — the instructor will arrange the time with you.`;
+  const signedIn = !!(SESSION && state.portal);
+  $('pkgIdentity').style.display = signedIn ? 'none' : 'block';
+  const pa = $('pkgAs');
+  if (signedIn) {
+    pa.style.display = 'block';
+    pa.textContent = `Requesting as ${state.portal.name || state.portal.email} (${state.portal.email}).`;
+    if (!$('pkPostcode').value && state.portal.postcode) $('pkPostcode').value = state.portal.postcode;
+    if (!$('pkHouse').value && state.portal.house) $('pkHouse').value = state.portal.house;
+  } else pa.style.display = 'none';
+  $('pkgPanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}));
+$('pkClose').onclick = () => { $('pkgPanel').style.display = 'none'; curPkg = null; };
+
+$('pkGo').onclick = async () => {
+  const m = $('pkMsg'); m.className = 'msg';
+  const signedIn = !!(SESSION && state.portal);
+  if (!signedIn && (!$('pkName').value.trim() || !$('pkEmail').value.trim() || !$('pkPhone').value.trim())) {
+    m.className = 'msg err'; m.textContent = 'Please fill in your name, email and phone.'; return;
+  }
+  try {
+    if (!DEMO) await api('/api/package', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(signedIn ? { Authorization: 'Bearer ' + SESSION } : {}) },
+      body: JSON.stringify({
+        package: curPkg,
+        name: $('pkName').value.trim(), email: $('pkEmail').value.trim(),
+        phone: $('pkPhone').value.trim(), house: $('pkHouse').value.trim(),
+        postcode: $('pkPostcode').value.trim(), notes: $('pkNotes').value.trim(),
+      }),
+    });
+    m.className = 'msg ok';
+    m.textContent = 'Request sent! The instructor will review it and get back to you.';
+    for (const id of ['pkName', 'pkEmail', 'pkPhone', 'pkNotes']) $(id).value = '';
+  } catch (err) { m.className = 'msg err'; m.textContent = err.message; }
+};
 const fmtMoney = v => '£' + (Number.isInteger(v) ? v : v.toFixed(2));
 
 async function api(path, opts) {
@@ -447,6 +521,10 @@ async function loadConfig() {
     `${CONFIG.cancel_notice_hours} hours before it starts incurs a ${fmtMoney(CONFIG.late_cancel_fee)} last-minute fee.`;
   // Old-shape configs sent a flat price map; normalize to per-transmission maps
   if (CONFIG.prices && !CONFIG.prices.manual) CONFIG.prices = { manual: CONFIG.prices, automatic: {} };
+  if (CONFIG.packages) {
+    $('pkgBegPrice').textContent = '£' + CONFIG.packages.beginner.price;
+    $('pkgMockPrice').textContent = '£' + CONFIG.packages.mock.price;
+  }
   // Slider bounds follow the instructor's configured lesson-length range
   const s = $('lenSlider');
   s.min = CONFIG.min_duration; s.max = CONFIG.max_duration;
@@ -699,7 +777,16 @@ function renderPortal() {
   else pn.style.display = 'none';
   $('tOwed').textContent = fmtMoney(j.owed);
   $('tCredit').textContent = fmtMoney(j.credit);
+  $('tHoursWrap').style.display = j.credit_min > 0 ? '' : 'none';
+  $('tHours').textContent = fmtH(j.credit_min || 0);
   $('tUpcoming').textContent = fmtMoney(j.upcoming_cost);
+  const chl = $('chargesLine');
+  const unpaidCh = (j.charges || []).filter(c => !c.paid);
+  if (unpaidCh.length) {
+    chl.style.display = 'block';
+    chl.textContent = 'Package charges due: ' +
+      unpaidCh.map(c => `${c.label} ${fmtMoney(c.amount)}`).join(' · ') + ' — pay the instructor directly.';
+  } else chl.style.display = 'none';
   $('portalNote').textContent =
     `Cancelling less than ${j.cancel_notice_hours} hours before a lesson incurs a ` +
     `${fmtMoney(j.late_cancel_fee)} last-minute cancellation fee. “Owed” covers past unpaid lessons and any ` +

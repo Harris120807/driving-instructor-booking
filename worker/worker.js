@@ -71,6 +71,15 @@ function lessonPrice(config, durationMin, type = 'manual') {
 
 const LESSON_TYPES = ['manual', 'automatic'];
 
+// Fixed packages pupils can request; prices are instructor-editable (config)
+function packageInfo(config) {
+  const p = (v, d) => Number.isFinite(parseFloat(v)) && parseFloat(v) >= 0 ? parseFloat(v) : d;
+  return {
+    beginner: { label: 'Beginner Package', minutes: 300, price: p(config.pkg_beginner_price, 190) },
+    mock: { label: 'Mock Test', minutes: 120, price: p(config.pkg_mock_price, 95) },
+  };
+}
+
 function json(data, status = 200, extra = {}) {
   return new Response(JSON.stringify(data), {
     status,
@@ -347,22 +356,25 @@ function upcomingCostOf(now, b) {
 
 async function studentMeta(env, email) {
   return (await env.DB.prepare('SELECT * FROM students WHERE email = ?').bind(email).first())
-    || { email, notes: '', passed: 0, credit: 0 };
+    || { email, notes: '', passed: 0, credit: 0, credit_min: 0 };
 }
 
 async function putStudentMeta(env, m) {
   await env.DB.prepare(
-    `INSERT INTO students (email, notes, passed, credit, test_date, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO students (email, notes, passed, credit, credit_min, test_date, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(email) DO UPDATE SET notes = excluded.notes, passed = excluded.passed,
-       credit = excluded.credit, test_date = excluded.test_date, updated_at = excluded.updated_at`
-  ).bind(m.email, m.notes || '', m.passed ? 1 : 0, m.credit || 0, m.test_date || null,
-    Math.floor(Date.now() / 1000)).run();
+       credit = excluded.credit, credit_min = excluded.credit_min,
+       test_date = excluded.test_date, updated_at = excluded.updated_at`
+  ).bind(m.email, m.notes || '', m.passed ? 1 : 0, m.credit || 0, m.credit_min || 0,
+    m.test_date || null, Math.floor(Date.now() / 1000)).run();
 }
 
 // Full account picture for one pupil (shared by /me/lessons and the console)
 async function accountFor(env, email) {
   const rows = (await env.DB.prepare(
     'SELECT * FROM bookings WHERE email = ? ORDER BY date, time').bind(email).all()).results;
+  const charges = (await env.DB.prepare(
+    'SELECT * FROM charges WHERE email = ? ORDER BY created_at').bind(email).all()).results;
   const meta = await studentMeta(env, email);
   const now = ukNowParts();
   let gross = 0, upcoming = 0;
@@ -371,11 +383,13 @@ async function accountFor(env, email) {
     upcoming += upcomingCostOf(now, r);
     return { ...publicLesson(r), past: lessonPast(now, r) };
   });
+  for (const ch of charges) if (!ch.paid) gross += ch.amount;
   const lastRow = rows.length ? rows[rows.length - 1] : null;
   return {
     name: lastRow ? lastRow.name : '',
     postcode: lastRow ? lastRow.postcode : '', house: lastRow ? (lastRow.house || '') : '',
-    lessons, gross_owed: gross, credit: meta.credit || 0,
+    lessons, gross_owed: gross, credit: meta.credit || 0, credit_min: meta.credit_min || 0,
+    charges: charges.map(ch => ({ id: ch.id, label: ch.label, amount: ch.amount, paid: !!ch.paid })),
     owed: Math.max(0, gross - (meta.credit || 0)),
     upcoming_cost: upcoming, passed: !!meta.passed,
     test_date: meta.test_date || null, meta,
@@ -429,7 +443,47 @@ export default {
           notice_hours: c.notice_hours,
           cancel_notice_hours: c.cancel_notice_hours, late_cancel_fee: c.late_cancel_fee,
           horizon_days: c.horizon_days, durations: DURATIONS, max_repeat_weeks: MAX_REPEAT_WEEKS,
+          packages: packageInfo(c),
         }, 200, { 'Cache-Control': 'public, max-age=300' });
+      }
+
+      // Package request (Beginner / Mock Test) — reviewed by the instructor
+      if (path === '/api/package' && req.method === 'POST') {
+        const ip = req.headers.get('CF-Connecting-IP') || 'unknown';
+        if (await rateLimited(env, `book:${ip}`, 5, 3600))
+          return json({ error: 'Too many requests — please try again later.' }, 429);
+        const b = await readBody(req);
+        const config = await getSetting(env, 'config', DEFAULT_CONFIG);
+        const pkg = packageInfo(config)[b?.package];
+        if (!pkg) return json({ error: 'bad request' }, 400);
+        const sessEmail = await sessionEmail(req, env);
+        let name = String(b.name || '').trim(), email, phone = String(b.phone || '').trim();
+        if (sessEmail) {
+          email = sessEmail;
+          if (!name || !phone) {
+            const prev = await env.DB.prepare(
+              'SELECT name, phone FROM bookings WHERE email = ? ORDER BY created_at DESC LIMIT 1'
+            ).bind(email).first();
+            name = name || prev?.name || '';
+            phone = phone || prev?.phone || '';
+          }
+        } else {
+          email = String(b.email || '').trim().toLowerCase();
+          if (!RE_EMAIL.test(email) || email.length > 200) return json({ error: 'Please give a valid email.' }, 400);
+        }
+        if (name.length < 2 || name.length > 100) return json({ error: 'Please give your name.' }, 400);
+        if (!RE_PHONE.test(phone)) return json({ error: 'Please give a valid phone number.' }, 400);
+        const postcode = String(b.postcode || '').trim().toUpperCase().slice(0, 10);
+        const house = String(b.house || '').trim().slice(0, 30);
+        const notes = String(b.notes || '').slice(0, 500);
+        await env.DB.prepare(
+          `INSERT INTO package_requests (package, name, email, phone, postcode, house, notes, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
+        ).bind(b.package, name, email.toLowerCase(), phone, postcode, house, notes,
+          Math.floor(Date.now() / 1000)).run();
+        notify(env, ctx, `Package request: ${pkg.label}`,
+          `${name} — ${phone}\n£${pkg.price} · review in the console`);
+        return json({ ok: true, package: pkg.label });
       }
 
       if (path === '/api/slots' && req.method === 'GET') {
@@ -585,7 +639,7 @@ export default {
           const config = await getSetting(env, 'config', DEFAULT_CONFIG);
           return json({
             email, name: acc.name, postcode: acc.postcode, house: acc.house,
-            lessons: acc.lessons,
+            lessons: acc.lessons, charges: acc.charges, credit_min: acc.credit_min,
             owed: acc.owed, gross_owed: acc.gross_owed, credit: acc.credit,
             upcoming_cost: acc.upcoming_cost, passed: acc.passed, test_date: acc.test_date,
             cancel_notice_hours: config.cancel_notice_hours, late_cancel_fee: config.late_cancel_fee,
@@ -678,6 +732,8 @@ export default {
           const month = now.date.slice(0, 7);
           let weekBooked = 0, monthBooked = 0, monthCollected = 0, pending = 0;
           const gross = new Map();
+          for (const ch of (await env.DB.prepare('SELECT * FROM charges').all()).results)
+            if (!ch.paid) gross.set(ch.email, (gross.get(ch.email) || 0) + ch.amount);
           for (const r of rows) {
             if (r.status === 'pending' && !lessonPast(now, r)) pending++;
             if (r.status !== 'cancelled') {
@@ -826,6 +882,9 @@ export default {
           const rows = (await env.DB.prepare('SELECT * FROM bookings ORDER BY created_at').all()).results;
           const metas = new Map((await env.DB.prepare('SELECT * FROM students').all())
             .results.map(m => [m.email, m]));
+          const chargesBy = new Map();
+          for (const ch of (await env.DB.prepare('SELECT * FROM charges').all()).results)
+            if (!ch.paid) chargesBy.set(ch.email, (chargesBy.get(ch.email) || 0) + ch.amount);
           const now = ukNowParts();
           const map = new Map();
           for (const r of rows) {
@@ -844,7 +903,9 @@ export default {
           }
           const students = [...map.values()].map(s => {
             const m = metas.get(s.email) || {};
+            s.gross_owed += chargesBy.get(s.email) || 0;
             s.credit = m.credit || 0;
+            s.credit_min = m.credit_min || 0;
             s.passed = !!m.passed;
             s.test_date = m.test_date || null;
             s.has_notes = !!(m.notes && m.notes.trim());
@@ -860,18 +921,79 @@ export default {
           if (!RE_EMAIL.test(email)) return json({ error: 'bad request' }, 400);
           const rows = (await env.DB.prepare(
             'SELECT * FROM bookings WHERE email = ? ORDER BY date DESC, time DESC').bind(email).all()).results;
+          const chRows = (await env.DB.prepare(
+            'SELECT * FROM charges WHERE email = ? ORDER BY created_at').bind(email).all()).results;
           const now = ukNowParts();
           const meta = await studentMeta(env, email);
-          const gross = rows.reduce((a, r) => a + owedOf(now, r), 0);
+          const gross = rows.reduce((a, r) => a + owedOf(now, r), 0) +
+            chRows.reduce((a, ch) => a + (ch.paid ? 0 : ch.amount), 0);
           const hasAccount = !!(await env.DB.prepare(
             'SELECT email FROM users WHERE email = ?').bind(email).first());
           return json({
             lessons: rows.map(r => ({ ...r, past: lessonPast(now, r), owed_now: owedOf(now, r) })),
+            charges: chRows,
             meta: { notes: meta.notes || '', passed: !!meta.passed, credit: meta.credit || 0,
-              test_date: meta.test_date || null },
+              credit_min: meta.credit_min || 0, test_date: meta.test_date || null },
             gross_owed: gross, owed: Math.max(0, gross - (meta.credit || 0)),
             has_account: hasAccount,
           });
+        }
+
+        if (path === '/admin/packages' && req.method === 'GET') {
+          return json({
+            requests: (await env.DB.prepare(
+              'SELECT * FROM package_requests ORDER BY created_at DESC LIMIT 100').all()).results,
+            packages: packageInfo(await getSetting(env, 'config', DEFAULT_CONFIG)),
+          });
+        }
+
+        // Accepting a package credits the lesson-time hours and raises the
+        // package charge (owed until marked paid)
+        if (path === '/admin/package' && req.method === 'POST') {
+          const b = await readBody(req);
+          if (!b || !Number.isInteger(b.id) || !['accept', 'decline'].includes(b.action))
+            return json({ error: 'bad request' }, 400);
+          const row = await env.DB.prepare('SELECT * FROM package_requests WHERE id = ?').bind(b.id).first();
+          if (!row) return json({ error: 'not found' }, 404);
+          if (row.status !== 'pending') return json({ error: 'Already handled.' }, 409);
+          if (b.action === 'accept') {
+            const config = await getSetting(env, 'config', DEFAULT_CONFIG);
+            const pkg = packageInfo(config)[row.package];
+            if (!pkg) return json({ error: 'unknown package' }, 400);
+            const m = await studentMeta(env, row.email);
+            m.credit_min = (m.credit_min || 0) + pkg.minutes;
+            await putStudentMeta(env, { ...m, email: row.email });
+            await env.DB.prepare(
+              'INSERT INTO charges (email, label, amount, paid, created_at) VALUES (?, ?, ?, 0, ?)'
+            ).bind(row.email, pkg.label, pkg.price, Math.floor(Date.now() / 1000)).run();
+          }
+          await env.DB.prepare('UPDATE package_requests SET status = ? WHERE id = ?')
+            .bind(b.action === 'accept' ? 'accepted' : 'declined', b.id).run();
+          return json({ ok: true });
+        }
+
+        if (path === '/admin/charge' && req.method === 'POST') {
+          const b = await readBody(req);
+          if (!b || !Number.isInteger(b.id) || ![0, 1].includes(b.paid)) return json({ error: 'bad request' }, 400);
+          await env.DB.prepare('UPDATE charges SET paid = ? WHERE id = ?').bind(b.paid, b.id).run();
+          return json({ ok: true });
+        }
+
+        // Settle one unpaid lesson from the pupil's prepaid lesson-time hours
+        if (path === '/admin/cover-from-hours' && req.method === 'POST') {
+          const b = await readBody(req);
+          if (!b || !Number.isInteger(b.id)) return json({ error: 'bad request' }, 400);
+          const row = await env.DB.prepare('SELECT * FROM bookings WHERE id = ?').bind(b.id).first();
+          if (!row) return json({ error: 'not found' }, 404);
+          if (row.paid) return json({ error: 'Already marked paid.' }, 409);
+          if (row.status === 'cancelled') return json({ error: 'Hours cover lessons, not cancellation fees.' }, 400);
+          const m = await studentMeta(env, row.email);
+          if ((m.credit_min || 0) < row.duration_min)
+            return json({ error: `Not enough lesson-time credit (${m.credit_min || 0} min available, ${row.duration_min} needed).` }, 409);
+          m.credit_min -= row.duration_min;
+          await putStudentMeta(env, { ...m, email: row.email });
+          await env.DB.prepare('UPDATE bookings SET paid = 1 WHERE id = ?').bind(b.id).run();
+          return json({ ok: true, credit_min: m.credit_min });
         }
 
         if (path === '/admin/student-meta' && req.method === 'POST') {
@@ -889,12 +1011,16 @@ export default {
           const b = await readBody(req);
           const email = String(b?.email || '').trim().toLowerCase();
           const delta = parseFloat(b?.delta);
-          if (!RE_EMAIL.test(email) || !Number.isFinite(delta) || Math.abs(delta) > 5000)
+          if (!RE_EMAIL.test(email) || !Number.isFinite(delta) || Math.abs(delta) > 6000)
             return json({ error: 'bad request' }, 400);
           const m = await studentMeta(env, email);
-          m.credit = Math.max(0, Math.round(((m.credit || 0) + delta) * 100) / 100);
+          if (b.unit === 'minutes') {
+            m.credit_min = Math.max(0, Math.round((m.credit_min || 0) + delta));
+          } else {
+            m.credit = Math.max(0, Math.round(((m.credit || 0) + delta) * 100) / 100);
+          }
           await putStudentMeta(env, { ...m, email });
-          return json({ ok: true, credit: m.credit });
+          return json({ ok: true, credit: m.credit || 0, credit_min: m.credit_min || 0 });
         }
 
         // Settle one unpaid lesson (or cancellation fee) from the pupil's credit
@@ -994,6 +1120,8 @@ export default {
             cancel_notice_hours: num(c.cancel_notice_hours, 0, 168, DEFAULT_CONFIG.cancel_notice_hours),
             late_cancel_fee: num(c.late_cancel_fee, 0, 500, DEFAULT_CONFIG.late_cancel_fee),
             horizon_days: Math.round(num(c.horizon_days, 1, 90, DEFAULT_CONFIG.horizon_days)),
+            pkg_beginner_price: num(c.pkg_beginner_price, 0, 2000, 190),
+            pkg_mock_price: num(c.pkg_mock_price, 0, 2000, 95),
           };
           await putSetting(env, 'config', clean);
           return json({ ok: true });

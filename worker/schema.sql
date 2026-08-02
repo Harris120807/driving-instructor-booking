@@ -56,10 +56,37 @@ CREATE TABLE IF NOT EXISTS students (
   notes      TEXT NOT NULL DEFAULT '',
   passed     INTEGER NOT NULL DEFAULT 0,     -- 1 = passed their test (hidden from default list)
   credit     REAL NOT NULL DEFAULT 0,        -- £ prepaid balance
+  credit_min INTEGER NOT NULL DEFAULT 0,     -- prepaid lesson time (minutes, e.g. packages)
   test_date  TEXT,                           -- pupil-entered driving test date (YYYY-MM-DD)
   updated_at INTEGER
 );
 -- Existing deployments: ALTER TABLE students ADD COLUMN test_date TEXT;
+--                       ALTER TABLE students ADD COLUMN credit_min INTEGER NOT NULL DEFAULT 0;
+
+-- Standalone account charges (package fees etc.) — count toward owed until paid
+CREATE TABLE IF NOT EXISTS charges (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  email      TEXT NOT NULL,
+  label      TEXT NOT NULL,                  -- e.g. 'Beginner Package'
+  amount     REAL NOT NULL,                  -- £
+  paid       INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_charges_email ON charges(email);
+
+-- Pupil requests for fixed packages, reviewed in the console
+CREATE TABLE IF NOT EXISTS package_requests (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  package    TEXT NOT NULL,                  -- key into the PACKAGES map in worker.js
+  name       TEXT NOT NULL,
+  email      TEXT NOT NULL,
+  phone      TEXT NOT NULL,
+  postcode   TEXT NOT NULL DEFAULT '',
+  house      TEXT NOT NULL DEFAULT '',
+  notes      TEXT DEFAULT '',
+  status     TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | declined
+  created_at INTEGER NOT NULL
+);
 
 -- Pupil login accounts (signup requires a booking ref as proof of identity —
 -- there is no email-verification service on this project)

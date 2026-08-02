@@ -212,6 +212,11 @@
           <div class="kpi owe"><div class="v" id="kOutstanding">£0</div><div class="l">Outstanding (all pupils)</div></div>
         </div>
       </div>
+      <div class="card" id="pkgReqCard">
+        <h2>Package requests</h2>
+        <div id="pkgReqList" class="muted">Loading…</div>
+        <div class="msg" id="prMsg"></div>
+      </div>
       <div class="card" id="addCard" style="display:none">
         <h2>Add a booking</h2>
         <p class="muted">For pupils who ring or text you. Books at <b>any</b> time — outside your usual hours, inside the notice window, even in the past to record an old lesson. Only a clash with an existing lesson is blocked. If you don't know their email, leave it blank — their lessons still group under one pupil by phone number.</p>
@@ -340,15 +345,26 @@
             <button class="btn sm" id="sdSaveNotes">Save notes</button>
           </div>
           <div>
-            <div class="field"><label>Lesson credit (prepaid balance)</label>
+            <div class="field"><label>Money credit (£)</label>
               <div style="font-size:1.3rem;font-weight:700" id="sdCredit">£0</div></div>
             <div class="ovrow">
               <input type="number" id="sdCreditAmt" step="0.5" placeholder="£ amount" style="width:110px">
               <button class="btn sm" id="sdCreditAdd">Add</button>
               <button class="btn ghost sm" id="sdCreditSub">Deduct</button>
             </div>
-            <p class="muted">Use “Pay from credit” on a lesson to settle it from this balance.</p>
+            <div class="field" style="margin-top:10px"><label>Lesson time credit (packages / prepaid hours)</label>
+              <div style="font-size:1.3rem;font-weight:700" id="sdCreditMin">0h</div></div>
+            <div class="ovrow">
+              <input type="number" id="sdHoursAmt" step="0.5" min="0" placeholder="hours" style="width:110px">
+              <button class="btn sm" id="sdHoursAdd">Add</button>
+              <button class="btn ghost sm" id="sdHoursSub">Deduct</button>
+            </div>
+            <p class="muted">“Pay from credit” settles a lesson with money credit; “Cover from hours” uses lesson-time credit instead.</p>
           </div>
+        </div>
+        <div id="sdCharges" style="display:none; margin-bottom:12px">
+          <h2 style="font-size:1rem">Package charges</h2>
+          <table><tbody id="sdChargesBody"></tbody></table>
         </div>
         <div style="overflow-x:auto">
           <table>
@@ -418,6 +434,14 @@
             </select></div>
         </div>
         <div class="field"><div class="hint">Sets the range of the length slider on the booking page (30-minute steps). Your own Add-booking form isn’t limited by this.</div></div>
+        <h2 style="margin-top:18px">Package prices (£)</h2>
+        <div class="prices3">
+          <div class="field"><label for="sPkgBeg">Beginner Package (5 h)</label>
+            <input id="sPkgBeg" type="number" min="0" step="1"></div>
+          <div class="field"><label for="sPkgMock">Mock Test (2 h)</label>
+            <input id="sPkgMock" type="number" min="0" step="1"></div>
+        </div>
+        <div class="field"><div class="hint">Shown on the site’s Packages card; used when you accept a package request.</div></div>
         <h2 style="margin-top:18px">Booking rules</h2>
         <div class="field">
           <label for="sNotice">Minimum notice to <b>book</b> (hours)</label>
@@ -474,6 +498,7 @@ function esc(s) {
     c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
 const fmtMoney = v => '£' + (Number.isInteger(v) ? v : (+v).toFixed(2));
+const fmtH = m => `${Math.floor(m / 60)}${m % 60 === 30 ? '½' : ''}h`;
 const fmtWhen = (date, time) => new Date(date + 'T12:00:00')
   .toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) + (time ? ' ' + time : '');
 
@@ -583,8 +608,63 @@ $('statusFilters').addEventListener('click', e => {
   loadBookings();
 });
 
+// --- package requests ---
+async function loadPackages() {
+  const el = $('pkgReqList');
+  if (DEMO) { el.textContent = 'No package requests yet.'; return; }
+  let j;
+  try { j = await api('/admin/packages'); }
+  catch (e) { el.textContent = e.message; return; }
+  const pending = j.requests.filter(r => r.status === 'pending');
+  const done = j.requests.filter(r => r.status !== 'pending').slice(0, 5);
+  el.innerHTML = '';
+  if (!pending.length) el.innerHTML = '<span class="muted">No pending package requests.</span>';
+  for (const r of pending) {
+    const info = j.packages[r.package] || { label: r.package, price: 0, minutes: 0 };
+    const row = document.createElement('div');
+    row.className = 'ovrow';
+    row.innerHTML = `<span style="flex:1"><b>${esc(info.label)}</b> ${fmtMoney(info.price)} — ` +
+      `${esc(r.name)} (${esc(r.phone)}, <span class="muted">${esc(r.email)}</span>)` +
+      `${r.house || r.postcode ? ` · ${esc((r.house ? r.house + ' ' : '') + r.postcode)}` : ''}` +
+      `${r.notes ? `<br><span class="muted">${esc(r.notes)}</span>` : ''}</span>`;
+    const acc = document.createElement('button');
+    acc.className = 'btn sm'; acc.textContent = 'Accept';
+    acc.onclick = async () => {
+      if (!confirm(`Accept the ${info.label} for ${r.name}? This adds ${fmtH(info.minutes)} of lesson-time credit and puts ${fmtMoney(info.price)} due on their account.`)) return;
+      try {
+        await api('/admin/package', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: r.id, action: 'accept' }) });
+        ok($('prMsg'), `Accepted — ${fmtH(info.minutes)} credited, ${fmtMoney(info.price)} now due. Let ${r.name} know.`);
+        loadPackages(); loadStudents(); loadSummary();
+      } catch (e) { err($('prMsg'), e.message); }
+    };
+    const dec = document.createElement('button');
+    dec.className = 'btn ghost sm'; dec.textContent = 'Decline';
+    dec.onclick = async () => {
+      if (!confirm(`Decline the ${info.label} request from ${r.name}?`)) return;
+      try {
+        await api('/admin/package', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: r.id, action: 'decline' }) });
+        ok($('prMsg'), 'Declined. Let the pupil know.');
+        loadPackages();
+      } catch (e) { err($('prMsg'), e.message); }
+    };
+    row.append(acc, dec);
+    el.appendChild(row);
+  }
+  if (done.length) {
+    const d = document.createElement('div');
+    d.className = 'muted';
+    d.style.marginTop = '6px';
+    d.textContent = 'Recent: ' + done.map(r =>
+      `${(j.packages[r.package] || { label: r.package }).label} — ${r.name} (${r.status})`).join(' · ');
+    el.appendChild(d);
+  }
+}
+
 async function loadBookings() {
   loadSummary();
+  loadPackages();
   let rows;
   if (DEMO) {
     rows = demoBookings().filter(b => (!bookingsFilter || b.status === bookingsFilter) && !demoHidden.has(b.ref));
@@ -863,7 +943,7 @@ async function loadStudents() {
       `<td><b>${esc(s.name)}</b>${s.has_notes ? ' 📝' : ''}<br><span class="muted">${esc((s.house ? s.house + ' ' : '') + s.postcode)}</span></td>` +
       `<td>${esc(s.phone)}<br><span class="muted">${esc(s.email)}</span></td>` +
       `<td>${s.lessons}</td><td>${s.upcoming}</td><td>${fmtMoney(s.upcoming_cost)}</td>` +
-      `<td>${fmtMoney(s.credit)}</td>` +
+      `<td>${fmtMoney(s.credit)}${s.credit_min ? `<br><span class="muted">${fmtH(s.credit_min)} time</span>` : ''}</td>` +
       `<td>${s.owed > 0 ? `<span class="owed">${fmtMoney(s.owed)}</span>` : fmtMoney(0)}</td>` +
       `<td>${testCell(s.test_date)}</td>`;
     tr.onclick = () => loadStudent(s);
@@ -884,20 +964,21 @@ async function loadStudent(s) {
   curStudent = s;
   $('studentDetail').style.display = 'block';
   $('sdTitle').textContent = `${s.name} — account`;
-  let lessons, meta, hasAccount;
+  let lessons, meta, hasAccount, charges = [];
   if (DEMO) {
     lessons = demoBookings().filter(b => b.email === s.email)
       .map(b => ({ ...b, past: b.date < new Date().toISOString().slice(0, 10), owed_now: 0 }));
-    meta = { notes: s.notes || '', passed: !!s.passed, credit: s.credit || 0 };
+    meta = { notes: s.notes || '', passed: !!s.passed, credit: s.credit || 0, credit_min: 0 };
     hasAccount = false;
   } else {
     try {
       const j = await api('/admin/student?email=' + encodeURIComponent(s.email));
-      lessons = j.lessons; meta = j.meta; hasAccount = j.has_account;
+      lessons = j.lessons; meta = j.meta; hasAccount = j.has_account; charges = j.charges || [];
     } catch (e) { err($('sdMsg'), e.message); return; }
   }
   $('sdNotes').value = meta.notes;
   $('sdCredit').textContent = fmtMoney(meta.credit);
+  $('sdCreditMin').textContent = fmtH(meta.credit_min || 0);
   $('sdPassed').textContent = meta.passed ? '🎉 Passed — move back to Active' : 'Mark as passed';
   $('sdAccount').textContent = (hasAccount
     ? 'Has an online account (can sign in to see lessons and owed money).'
@@ -946,6 +1027,44 @@ async function loadStudent(s) {
   };
   $('sdCreditAdd').onclick = adjust(1);
   $('sdCreditSub').onclick = adjust(-1);
+  const adjustHours = sign => async () => {
+    const hrs = parseFloat($('sdHoursAmt').value);
+    if (!Number.isFinite(hrs) || hrs <= 0) { err($('sdMsg'), 'Enter a number of hours first.'); return; }
+    try {
+      const j = await api('/admin/credit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: s.email, delta: sign * Math.round(hrs * 60), unit: 'minutes' }),
+      });
+      meta.credit_min = j.credit_min;
+      $('sdCreditMin').textContent = fmtH(meta.credit_min);
+      $('sdHoursAmt').value = '';
+      ok($('sdMsg'), 'Lesson-time credit updated.');
+      loadStudents();
+    } catch (e) { err($('sdMsg'), e.message); }
+  };
+  $('sdHoursAdd').onclick = adjustHours(1);
+  $('sdHoursSub').onclick = adjustHours(-1);
+
+  // package charges
+  $('sdCharges').style.display = charges.length ? 'block' : 'none';
+  const cb = $('sdChargesBody'); cb.innerHTML = '';
+  for (const ch of charges) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><b>${esc(ch.label)}</b></td><td>${fmtMoney(ch.amount)}</td><td></td>`;
+    const pill = document.createElement('button');
+    pill.className = 'pp ' + (ch.paid ? 'yes' : 'no');
+    pill.textContent = ch.paid ? 'paid' : 'owed';
+    pill.onclick = async () => {
+      try {
+        await api('/admin/charge', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: ch.id, paid: ch.paid ? 0 : 1 }) });
+        ok($('sdMsg'), 'Charge updated.');
+        loadStudent(s); loadStudents();
+      } catch (e) { err($('sdMsg'), e.message); }
+    };
+    tr.lastElementChild.appendChild(pill);
+    cb.appendChild(tr);
+  }
 
   const tb = $('studentLessons'); tb.innerHTML = '';
   for (const l of lessons) {
@@ -993,6 +1112,23 @@ async function loadStudent(s) {
           } catch (e) { err($('sdMsg'), e.message); }
         };
         cell.appendChild(pc);
+      }
+      if (!l.paid && l.status !== 'cancelled' && (meta.credit_min || 0) >= l.duration_min) {
+        const ph = document.createElement('button');
+        ph.className = 'btn ghost sm';
+        ph.style.marginLeft = '6px';
+        ph.textContent = 'Cover from hours';
+        ph.onclick = async () => {
+          try {
+            const j = await api('/admin/cover-from-hours', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: l.id }),
+            });
+            ok($('sdMsg'), `Covered ${l.duration_min} min from lesson-time credit (${fmtH(j.credit_min)} left).`);
+            loadStudent(s); loadStudents();
+          } catch (e) { err($('sdMsg'), e.message); }
+        };
+        cell.appendChild(ph);
       }
     } else cell.innerHTML = '<span class="muted">—</span>';
     tb.appendChild(tr);
@@ -1352,6 +1488,8 @@ async function loadSettings() {
   $('sMaxLen').value = String(c.max_duration ?? 240);
   $('sNotice').value = c.notice_hours; $('sCancelNotice').value = c.cancel_notice_hours;
   $('sFee').value = c.late_cancel_fee; $('sHorizon').value = c.horizon_days;
+  $('sPkgBeg').value = c.pkg_beginner_price ?? 190;
+  $('sPkgMock').value = c.pkg_mock_price ?? 95;
   $('consTitle').textContent = c.name + ' — console';
   RATE = parseFloat($('sRate').value) || 44;
   RATE_AUTO = parseFloat($('sRateAuto').value) || 46;
@@ -1365,6 +1503,8 @@ $('saveSettings').onclick = async () => {
     hourly_rate_auto: parseFloat($('sRateAuto').value),
     min_duration: parseInt($('sMinLen').value, 10),
     max_duration: parseInt($('sMaxLen').value, 10),
+    pkg_beginner_price: parseFloat($('sPkgBeg').value),
+    pkg_mock_price: parseFloat($('sPkgMock').value),
     notice_hours: parseFloat($('sNotice').value),
     cancel_notice_hours: parseFloat($('sCancelNotice').value),
     late_cancel_fee: parseFloat($('sFee').value),
