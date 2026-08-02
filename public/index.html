@@ -35,20 +35,17 @@
   }
   .wrap { max-width: 880px; margin: 0 auto; padding: 16px 16px 80px; }
   header.hero {
-    background: var(--accent); color: #fff; border-radius: 14px;
-    padding: 28px 24px; margin-bottom: 20px;
+    background: var(--card); color: var(--text); border: 1px solid var(--border);
+    border-radius: 14px; padding: 28px 24px; margin-bottom: 20px;
   }
   header.hero h1 { margin: 0 0 6px; font-size: 1.7rem; }
-  .brand-plate {
-    background: #fff; border-radius: 12px; padding: 8px 12px;
-    display: inline-block; margin-bottom: 12px; max-width: 100%;
-  }
-  .brand-plate img { display: block; max-width: 100%; height: auto; max-height: 96px; }
-  header.hero p { margin: 0; opacity: .92; }
+  .brand-plate { display: inline-block; margin-bottom: 12px; max-width: 100%; }
+  .brand-plate img { display: block; max-width: 100%; height: auto; max-height: 110px; }
+  header.hero p { margin: 0; color: var(--muted); }
   .badges { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
   .badge {
-    background: rgba(255,255,255,0.16); border-radius: 999px;
-    padding: 4px 12px; font-size: .85rem;
+    background: var(--accent-soft); color: var(--good); border-radius: 999px;
+    padding: 4px 12px; font-size: .85rem; font-weight: 600;
   }
   .card {
     background: var(--card); border: 1px solid var(--border);
