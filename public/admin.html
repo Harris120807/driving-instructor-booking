@@ -329,7 +329,7 @@
         </div>
         <div style="overflow-x:auto">
           <table>
-            <thead><tr><th>Pupil</th><th>Contact</th><th>Lessons</th><th>Upcoming</th><th>Upcoming cost</th><th>Credit</th><th>Owed</th><th>Test</th></tr></thead>
+            <thead><tr><th>Pupil</th><th>Contact</th><th>Lessons</th><th>Upcoming</th><th>Upcoming cost</th><th>Credit</th><th>Owed</th><th>Test</th><th></th></tr></thead>
             <tbody id="studentsBody"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
           </table>
         </div>
@@ -956,9 +956,38 @@ async function loadStudents() {
         `${s.credit_mock ? `<br><span class="muted">${s.credit_mock}× mock</span>` : ''}</td>` +
       `<td>${s.owed > 0 ? `<span class="owed">${fmtMoney(s.owed)}</span>` : fmtMoney(0)}</td>` +
       `<td>${testCell(s.test_date)}</td>`;
+    if (passedFilter) {
+      const cell = document.createElement('td');
+      cell.appendChild(removeStudentBtn(s));
+      tr.appendChild(cell);
+    }
     tr.onclick = () => loadStudent(s);
     tb.appendChild(tr);
   }
+}
+
+// Passed pupils can be erased entirely — two-step confirm, warns on debt
+function removeStudentBtn(s) {
+  const btn = document.createElement('button');
+  btn.className = 'btn sm danger';
+  btn.textContent = 'Remove';
+  btn.title = 'Delete this pupil and all their history';
+  btn.onclick = async e => {
+    e.stopPropagation();
+    const owes = s.owed > 0 ? `\n\nWARNING: they still owe ${fmtMoney(s.owed)} — that record will be lost too.` : '';
+    if (!confirm(`Permanently remove ${s.name}?\n\nThis deletes their lessons, payment history and online account. It cannot be undone.${owes}`)) return;
+    if (!confirm(`Last check — delete ${s.name} for good?`)) return;
+    try {
+      const j = await api('/admin/student-delete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: s.email }),
+      });
+      ok($('sdMsg'), `${s.name} removed (${j.deleted_lessons} lesson record(s) deleted).`);
+      $('studentDetail').style.display = 'none';
+      loadStudents(); loadBookings(); loadCalendar();
+    } catch (e2) { err($('sdMsg'), e2.message); }
+  };
+  return btn;
 }
 
 function testCell(td) {
@@ -991,6 +1020,14 @@ async function loadStudent(s) {
   $('sdCreditMin').textContent = fmtH(meta.credit_min || 0);
   $('sdCreditMock').textContent = meta.credit_mock || 0;
   $('sdPassed').textContent = meta.passed ? '🎉 Passed — move back to Active' : 'Mark as passed';
+  const oldRm = document.getElementById('sdRemove');
+  if (oldRm) oldRm.remove();
+  if (meta.passed) {
+    const rm = removeStudentBtn({ ...s, owed: s.owed ?? 0 });
+    rm.id = 'sdRemove';
+    rm.style.marginLeft = '8px';
+    $('sdPassed').after(rm);
+  }
   $('sdAccount').textContent = (hasAccount
     ? 'Has an online account (can sign in to see lessons and owed money).'
     : 'No online account yet — they can create one on the site with any booking reference.')

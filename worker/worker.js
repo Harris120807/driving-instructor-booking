@@ -1039,6 +1039,29 @@ export default {
           return json({ ok: true, credit_min: m.credit_min || 0, credit_mock: m.credit_mock || 0 });
         }
 
+        // Permanently remove a pupil and everything tied to them. Guarded to
+        // pupils marked as passed so an active learner can't be wiped by a
+        // mis-tap; deliberately irreversible (full erase, GDPR-friendly).
+        if (path === '/admin/student-delete' && req.method === 'POST') {
+          const b = await readBody(req);
+          const email = String(b?.email || '').trim().toLowerCase();
+          if (!RE_EMAIL.test(email)) return json({ error: 'bad request' }, 400);
+          const meta = await env.DB.prepare('SELECT * FROM students WHERE email = ?').bind(email).first();
+          if (!meta || !meta.passed)
+            return json({ error: 'Only pupils marked as passed can be removed.' }, 409);
+          const { c: lessons } = await env.DB.prepare(
+            'SELECT COUNT(*) AS c FROM bookings WHERE email = ?').bind(email).first();
+          for (const sql of [
+            'DELETE FROM bookings WHERE email = ?',
+            'DELETE FROM charges WHERE email = ?',
+            'DELETE FROM package_requests WHERE email = ?',
+            'DELETE FROM sessions WHERE email = ?',
+            'DELETE FROM users WHERE email = ?',
+            'DELETE FROM students WHERE email = ?',
+          ]) await env.DB.prepare(sql).bind(email).run();
+          return json({ ok: true, deleted_lessons: lessons });
+        }
+
         if (path === '/admin/student-meta' && req.method === 'POST') {
           const b = await readBody(req);
           const email = String(b?.email || '').trim().toLowerCase();
