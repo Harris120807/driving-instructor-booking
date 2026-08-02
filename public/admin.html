@@ -215,7 +215,14 @@
               <div class="field"><label for="abRepeat">Repeat</label>
                 <select id="abRepeat"><option value="1">One-off</option><option value="4">Weekly ×4</option><option value="8">Weekly ×8</option><option value="12">Weekly ×12</option></select></div>
             </div>
-            <div class="field"><label><input type="checkbox" id="abConfirmed" checked> Already agreed with the pupil (mark confirmed)</label></div>
+            <div class="field">
+              <label>Booking status</label>
+              <div class="filters" style="margin-bottom:2px">
+                <button type="button" class="chip sel" data-abstatus="confirmed">✓ Confirmed</button>
+                <button type="button" class="chip" data-abstatus="pending">Pending</button>
+              </div>
+              <div class="hint" id="abStatusHint">Already agreed with the pupil — goes straight into the diary as a done deal.</div>
+            </div>
             <div class="field"><label for="abNotes">Notes</label><input id="abNotes" maxlength="500" style="width:100%"></div>
             <button class="btn" id="abGo">Add booking</button>
           </div>
@@ -696,6 +703,15 @@ $('abDur').addEventListener('change', () => {
   $('abPrice').value = Math.round(RATE * parseInt($('abDur').value, 10) / 60 * 100) / 100;
 });
 
+let abStatus = 'confirmed';
+document.querySelectorAll('[data-abstatus]').forEach(c => c.onclick = () => {
+  abStatus = c.dataset.abstatus;
+  document.querySelectorAll('[data-abstatus]').forEach(x => x.classList.toggle('sel', x === c));
+  $('abStatusHint').textContent = abStatus === 'confirmed'
+    ? 'Already agreed with the pupil — goes straight into the diary as a done deal.'
+    : 'Provisional — sits in your Pending list until you confirm it with the pupil.';
+});
+
 // Autofill contact fields when an existing pupil is picked from the datalist
 $('abName').addEventListener('change', () => {
   const s = STUDENTS.find(x => x.name === $('abName').value.trim());
@@ -712,7 +728,7 @@ $('abGo').onclick = async () => {
     duration: parseInt($('abDur').value, 10),
     price: parseFloat($('abPrice').value),
     repeat_weeks: parseInt($('abRepeat').value, 10),
-    status: $('abConfirmed').checked ? 'confirmed' : 'pending',
+    status: abStatus,
     name: $('abName').value.trim(), phone: $('abPhone').value.trim(),
     email: $('abEmail').value.trim(), house: $('abHouse').value.trim(),
     postcode: $('abPostcode').value.trim(), notes: $('abNotes').value.trim(),
