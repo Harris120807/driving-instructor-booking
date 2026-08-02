@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS bookings (
   time         TEXT NOT NULL,                 -- HH:MM (UK local)
   duration_min INTEGER NOT NULL,
   price        REAL NOT NULL,                 -- £, captured at booking time
+  lesson_type  TEXT NOT NULL DEFAULT 'manual', -- manual | automatic
+  motorway     INTEGER NOT NULL DEFAULT 0,    -- 1 = motorway lesson
   name         TEXT NOT NULL,
   email        TEXT NOT NULL,                 -- stored lowercased
   phone        TEXT NOT NULL,
@@ -34,6 +36,8 @@ CREATE TABLE IF NOT EXISTS bookings (
 );
 -- Existing deployments: ALTER TABLE bookings ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
 --                       ALTER TABLE bookings ADD COLUMN house TEXT NOT NULL DEFAULT '';
+--                       ALTER TABLE bookings ADD COLUMN lesson_type TEXT NOT NULL DEFAULT 'manual';
+--                       ALTER TABLE bookings ADD COLUMN motorway INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings(date, status);
 CREATE INDEX IF NOT EXISTS idx_bookings_email ON bookings(email);

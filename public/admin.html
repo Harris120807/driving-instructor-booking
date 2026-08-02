@@ -240,6 +240,15 @@
                 <select id="abRepeat"><option value="1">One-off</option><option value="4">Weekly ×4</option><option value="8">Weekly ×8</option><option value="12">Weekly ×12</option></select></div>
             </div>
             <div class="field">
+              <label>Transmission</label>
+              <div class="filters" style="margin-bottom:2px">
+                <button type="button" class="chip sel" data-abtype="manual">Manual</button>
+                <button type="button" class="chip" data-abtype="automatic">Automatic</button>
+              </div>
+            </div>
+            <div class="field"><label style="display:flex; gap:7px; align-items:center">
+              <input type="checkbox" id="abMotorway" style="width:auto"> Motorway lesson</label></div>
+            <div class="field">
               <label>Booking status</label>
               <div class="filters" style="margin-bottom:2px">
                 <button type="button" class="chip sel" data-abstatus="confirmed">✓ Confirmed</button>
@@ -386,11 +395,29 @@
         <div class="field"><label for="sPhone">Phone</label><input id="sPhone" maxlength="30"></div>
         <div class="field"><label for="sEmail">Email</label><input id="sEmail" type="email" maxlength="200"></div>
         <h2 style="margin-top:18px">Pricing</h2>
-        <div class="field">
-          <label for="sRate">Hourly rate (£)</label>
-          <input id="sRate" type="number" min="0" step="0.5">
-          <div class="hint">Pupils pick any length from 1 to 4 hours (30-min steps); the price scales with this rate — e.g. £44/h makes a 1½-hour lesson £66.</div>
+        <div class="prices3">
+          <div class="field"><label for="sRate">Hourly rate — manual (£)</label>
+            <input id="sRate" type="number" min="0" step="0.5"></div>
+          <div class="field"><label for="sRateAuto">Hourly rate — automatic (£)</label>
+            <input id="sRateAuto" type="number" min="0" step="0.5"></div>
         </div>
+        <div class="field"><div class="hint">Lesson price = rate × length, e.g. £44/h makes a 1½-hour manual lesson £66.</div></div>
+        <h2 style="margin-top:18px">Lesson lengths pupils can book</h2>
+        <div class="prices3">
+          <div class="field"><label for="sMinLen">Shortest</label>
+            <select id="sMinLen">
+              <option value="30">30 minutes</option><option value="60">1 hour</option>
+              <option value="90">1½ hours</option><option value="120">2 hours</option>
+            </select></div>
+          <div class="field"><label for="sMaxLen">Longest</label>
+            <select id="sMaxLen">
+              <option value="60">1 hour</option><option value="90">1½ hours</option>
+              <option value="120">2 hours</option><option value="150">2½ hours</option>
+              <option value="180">3 hours</option><option value="210">3½ hours</option>
+              <option value="240">4 hours</option>
+            </select></div>
+        </div>
+        <div class="field"><div class="hint">Sets the range of the length slider on the booking page (30-minute steps). Your own Add-booking form isn’t limited by this.</div></div>
         <h2 style="margin-top:18px">Booking rules</h2>
         <div class="field">
           <label for="sNotice">Minimum notice to <b>book</b> (hours)</label>
@@ -587,7 +614,7 @@ async function loadBookings() {
     tr.innerHTML =
       `<td><span class="wk">↻ WEEKLY ×${g.rows.length}</span><br><b>${dow}s</b> ${b0.time}<br>` +
       `<span class="muted">${fmtWhen(b0.date)} → ${fmtWhen(last.date)}</span></td>` +
-      `<td>${b0.duration_min}min</td>` +
+      `<td>${b0.duration_min}min${b0.lesson_type === 'automatic' ? ' auto' : ''}${b0.motorway ? '<br><span class="muted">motorway</span>' : ''}</td>` +
       `<td>${esc(b0.name)}${b0.notes ? `<br><span class="muted">${esc(b0.notes)}</span>` : ''}</td>` +
       `<td>${esc(b0.phone)}<br><span class="muted">${esc(b0.email)}</span></td>` +
       `<td>${esc((b0.house ? b0.house + ' ' : '') + b0.postcode)}</td>` +
@@ -624,7 +651,7 @@ function bookingRow(b, compact) {
   const tr = document.createElement('tr');
   tr.innerHTML =
     `<td><b>${fmtWhen(b.date)}</b> ${b.time}</td>` +
-    `<td>${b.duration_min}min</td>` +
+    `<td>${b.duration_min}min${b.lesson_type === 'automatic' ? ' auto' : ''}${b.motorway ? '<br><span class="muted">motorway</span>' : ''}</td>` +
     (compact ? '<td colspan="3" class="muted">↻ part of the weekly series</td>'
       : `<td>${esc(b.name)}${b.notes ? `<br><span class="muted">${esc(b.notes)}</span>` : ''}</td>` +
         `<td>${esc(b.phone)}<br><span class="muted">${esc(b.email)}</span></td>` +
@@ -710,21 +737,29 @@ function actBtn(label, action, b, danger) {
 }
 
 // --- add booking (instructor-created, any time) ---
-let RATE = 44;
+let RATE = 44, RATE_AUTO = 46;
 let STUDENTS = [];
+let abType = 'manual';
+const abRate = () => abType === 'automatic' ? RATE_AUTO : RATE;
+
+document.querySelectorAll('[data-abtype]').forEach(c => c.onclick = () => {
+  abType = c.dataset.abtype;
+  document.querySelectorAll('[data-abtype]').forEach(x => x.classList.toggle('sel', x === c));
+  $('abPrice').value = Math.round(abRate() * parseInt($('abDur').value, 10) / 60 * 100) / 100;
+});
 
 $('addToggle').onclick = () => {
   const c = $('addCard');
   const show = c.style.display === 'none';
   c.style.display = show ? 'block' : 'none';
   if (show) {
-    if (!$('abPrice').value) $('abPrice').value = RATE;
+    if (!$('abPrice').value) $('abPrice').value = abRate();
     $('abName').focus();
   }
 };
 
 $('abDur').addEventListener('change', () => {
-  $('abPrice').value = Math.round(RATE * parseInt($('abDur').value, 10) / 60 * 100) / 100;
+  $('abPrice').value = Math.round(abRate() * parseInt($('abDur').value, 10) / 60 * 100) / 100;
 });
 
 let abStatus = 'confirmed';
@@ -776,6 +811,7 @@ $('abGo').onclick = async () => {
     date: $('abDate').value, time: $('abTime').value,
     duration: parseInt($('abDur').value, 10),
     price: parseFloat($('abPrice').value),
+    lesson_type: abType, motorway: $('abMotorway').checked,
     repeat_weeks: parseInt($('abRepeat').value, 10),
     status: abStatus,
     name: $('abName').value.trim(), phone: $('abPhone').value.trim(),
@@ -1141,7 +1177,8 @@ function showCalDetail(b) {
   $('cdTitle').textContent = `${fmtWhen(b.date)} ${b.time} — ${b.name}`;
   const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
   $('cdBody').innerHTML =
-    row('Lesson', `${b.duration_min} min · ${fmtMoney(b.price)}${b.series ? ' · <span class="wk">↻ weekly</span>' : ''}`) +
+    row('Lesson', `${b.duration_min} min · ${b.lesson_type === 'automatic' ? 'automatic' : 'manual'}` +
+      `${b.motorway ? ' · motorway' : ''} · ${fmtMoney(b.price)}${b.series ? ' · <span class="wk">↻ weekly</span>' : ''}`) +
     row('Status', `<span class="st ${b.status}">${b.status}${b.cancelled_by === 'instructor' ? ' (you)' : ''}</span>` +
       (b.fee > 0 ? ` <span class="owed">fee ${fmtMoney(b.fee)}${b.paid ? ' paid' : ' owed'}</span>` : '')) +
     row('Pickup', esc((b.house ? b.house + ' ' : '') + b.postcode)) +
@@ -1301,8 +1338,8 @@ $('addOv').onclick = async () => {
 // --- settings ---
 async function loadSettings() {
   let c = { name: 'Your Driving School', area: '', phone: '', email: '',
-    hourly_rate: 44, notice_hours: 12,
-    cancel_notice_hours: 24, late_cancel_fee: 44, horizon_days: 21 };
+    hourly_rate: 44, hourly_rate_auto: 46, min_duration: 60, max_duration: 240,
+    notice_hours: 12, cancel_notice_hours: 24, late_cancel_fee: 44, horizon_days: 21 };
   if (!DEMO) {
     try { c = (await api('/admin/settings')).config; }
     catch (e) { err($('sMsg'), e.message); }
@@ -1310,10 +1347,14 @@ async function loadSettings() {
   $('sName').value = c.name; $('sArea').value = c.area;
   $('sPhone').value = c.phone; $('sEmail').value = c.email;
   $('sRate').value = c.hourly_rate ?? c.prices?.[60] ?? 44;
+  $('sRateAuto').value = c.hourly_rate_auto ?? 46;
+  $('sMinLen').value = String(c.min_duration ?? 60);
+  $('sMaxLen').value = String(c.max_duration ?? 240);
   $('sNotice').value = c.notice_hours; $('sCancelNotice').value = c.cancel_notice_hours;
   $('sFee').value = c.late_cancel_fee; $('sHorizon').value = c.horizon_days;
   $('consTitle').textContent = c.name + ' — console';
   RATE = parseFloat($('sRate').value) || 44;
+  RATE_AUTO = parseFloat($('sRateAuto').value) || 46;
 }
 
 $('saveSettings').onclick = async () => {
@@ -1321,6 +1362,9 @@ $('saveSettings').onclick = async () => {
     name: $('sName').value.trim(), area: $('sArea').value.trim(),
     phone: $('sPhone').value.trim(), email: $('sEmail').value.trim(),
     hourly_rate: parseFloat($('sRate').value),
+    hourly_rate_auto: parseFloat($('sRateAuto').value),
+    min_duration: parseInt($('sMinLen').value, 10),
+    max_duration: parseInt($('sMaxLen').value, 10),
     notice_hours: parseFloat($('sNotice').value),
     cancel_notice_hours: parseFloat($('sCancelNotice').value),
     late_cancel_fee: parseFloat($('sFee').value),
@@ -1333,6 +1377,8 @@ $('saveSettings').onclick = async () => {
     });
     ok($('sMsg'), 'Settings saved.');
     $('consTitle').textContent = config.name + ' — console';
+    RATE = config.hourly_rate || RATE;
+    RATE_AUTO = config.hourly_rate_auto || RATE_AUTO;
   } catch (e) { err($('sMsg'), e.message); }
 };
 

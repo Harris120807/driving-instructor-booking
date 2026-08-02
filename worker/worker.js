@@ -22,7 +22,10 @@ const DEFAULT_CONFIG = {
   area: 'Your town and surrounding areas',
   phone: '',
   email: '',
-  hourly_rate: 44,         // £ per hour; lesson price = rate × length
+  hourly_rate: 44,         // £ per hour, manual; lesson price = rate × length
+  hourly_rate_auto: 46,    // £ per hour, automatic
+  min_duration: 60,        // shortest lesson pupils can book (minutes)
+  max_duration: 240,       // longest lesson pupils can book (minutes)
   notice_hours: 12,        // minimum notice to BOOK a slot
   cancel_notice_hours: 24, // cancelling closer than this to the lesson incurs the fee
   late_cancel_fee: 44,     // £ owed for a late cancellation
@@ -40,17 +43,33 @@ const DEFAULT_TEMPLATE = {
 };
 
 const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-const DURATIONS = [60, 90, 120, 150, 180, 210, 240]; // 1–4 h, 30-min steps
+const DURATIONS = [30, 60, 90, 120, 150, 180, 210, 240]; // 30-min steps; pupil-facing
+// range is bounded by config min_duration/max_duration
+
+function durationBounds(config) {
+  let lo = DURATIONS.includes(config.min_duration) ? config.min_duration : 60;
+  let hi = DURATIONS.includes(config.max_duration) ? config.max_duration : 240;
+  if (lo > hi) [lo, hi] = [hi, lo];
+  return [lo, hi];
+}
 const SLOT_STEP_MIN = 30;   // start-time grid
 const MAX_REPEAT_WEEKS = 12;
 
-// Lesson price scales with length from the single hourly rate
+// Lesson price scales with length from the per-transmission hourly rate
 // (old configs stored a prices map — its 1-hour entry doubles as the rate)
-function lessonPrice(config, durationMin) {
-  const rate = Number.isFinite(config.hourly_rate) ? config.hourly_rate
-    : (config.prices?.[60] ?? 44);
+function lessonPrice(config, durationMin, type = 'manual') {
+  let rate;
+  if (type === 'automatic') {
+    rate = Number.isFinite(config.hourly_rate_auto) ? config.hourly_rate_auto
+      : (Number.isFinite(config.hourly_rate) ? config.hourly_rate + 2 : 46);
+  } else {
+    rate = Number.isFinite(config.hourly_rate) ? config.hourly_rate
+      : (config.prices?.[60] ?? 44);
+  }
   return Math.round(rate * durationMin / 60 * 100) / 100;
 }
+
+const LESSON_TYPES = ['manual', 'automatic'];
 
 function json(data, status = 200, extra = {}) {
   return new Response(JSON.stringify(data), {
@@ -382,6 +401,7 @@ function newRef() {
 const publicLesson = b => ({
   ref: b.ref, series: b.series, date: b.date, time: b.time,
   duration_min: b.duration_min, price: b.price, status: b.status,
+  lesson_type: b.lesson_type || 'manual', motorway: !!b.motorway,
   cancelled_by: b.cancelled_by, fee: b.fee, paid: !!b.paid,
 });
 
@@ -397,10 +417,15 @@ export default {
       // ---- public ----
       if (path === '/api/config' && req.method === 'GET') {
         const c = await getSetting(env, 'config', DEFAULT_CONFIG);
+        const [minD, maxD] = durationBounds(c);
         return json({
           name: c.name, area: c.area, phone: c.phone, email: c.email,
-          hourly_rate: lessonPrice(c, 60),
-          prices: Object.fromEntries(DURATIONS.map(d => [d, lessonPrice(c, d)])),
+          hourly_rate: lessonPrice(c, 60), hourly_rate_auto: lessonPrice(c, 60, 'automatic'),
+          min_duration: minD, max_duration: maxD,
+          prices: {
+            manual: Object.fromEntries(DURATIONS.map(d => [d, lessonPrice(c, d)])),
+            automatic: Object.fromEntries(DURATIONS.map(d => [d, lessonPrice(c, d, 'automatic')])),
+          },
           notice_hours: c.notice_hours,
           cancel_notice_hours: c.cancel_notice_hours, late_cancel_fee: c.late_cancel_fee,
           horizon_days: c.horizon_days, durations: DURATIONS, max_repeat_weeks: MAX_REPEAT_WEEKS,
@@ -413,6 +438,8 @@ export default {
         const dur = parseInt(url.searchParams.get('duration') || '60', 10);
         if (!RE_DATE.test(from || '') || !RE_DATE.test(to || '') || !DURATIONS.includes(dur))
           return json({ error: 'bad params' }, 400);
+        const [loS, hiS] = durationBounds(await getSetting(env, 'config', DEFAULT_CONFIG));
+        if (dur < loS || dur > hiS) return json({ error: 'bad params' }, 400);
         return json({ slots: await openSlots(env, from, to, dur) }, 200,
           { 'Cache-Control': 'public, max-age=60' });
       }
@@ -430,6 +457,8 @@ export default {
 
         if (!RE_DATE.test(date || '') || !RE_TIME.test(time || '')) return json({ error: 'Invalid slot.' }, 400);
         if (!DURATIONS.includes(duration)) return json({ error: 'Invalid duration.' }, 400);
+        const lessonType = LESSON_TYPES.includes(b.lesson_type) ? b.lesson_type : 'manual';
+        const motorway = b.motorway ? 1 : 0;
         if (!RE_UK_POSTCODE.test(b.postcode || '')) return json({ error: 'Please give a valid UK pickup postcode.' }, 400);
         const house = String(b.house || '').trim().slice(0, 30);
         if (!house) return json({ error: 'Please give your house number or name.' }, 400);
@@ -454,13 +483,16 @@ export default {
         if (bkName.length < 2 || bkName.length > 100) return json({ error: 'Please give your name.' }, 400);
         if (!RE_PHONE.test(bkPhone)) return json({ error: 'Please give a valid phone number.' }, 400);
 
+        const config = await getSetting(env, 'config', DEFAULT_CONFIG);
+        const [loB, hiB] = durationBounds(config);
+        if (duration < loB || duration > hiB) return json({ error: 'Invalid duration.' }, 400);
+
         // First lesson must be a genuinely open slot (notice + horizon enforced)
         const open = await openSlots(env, date, date, duration);
         if (!(open[date] || []).includes(time))
           return json({ error: 'That slot is no longer available — please pick another.' }, 409);
 
-        const config = await getSetting(env, 'config', DEFAULT_CONFIG);
-        const price = lessonPrice(config, duration);
+        const price = lessonPrice(config, duration, lessonType);
         const name = bkName, email = bkEmail.toLowerCase();
         const phone = bkPhone, postcode = String(b.postcode).trim().toUpperCase();
         const series = repeatWeeks > 1 ? newRef() : null;
@@ -476,14 +508,14 @@ export default {
           }
           const ref = newRef();
           await env.DB.prepare(
-            `INSERT INTO bookings (ref, series, date, time, duration_min, price, name, email, phone, postcode, house, notes, status, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
-          ).bind(ref, series, d, time, duration, price, name, email, phone, postcode, house, notes, nowSec).run();
+            `INSERT INTO bookings (ref, series, date, time, duration_min, price, lesson_type, motorway, name, email, phone, postcode, house, notes, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
+          ).bind(ref, series, d, time, duration, price, lessonType, motorway, name, email, phone, postcode, house, notes, nowSec).run();
           booked.push({ date: d, ref });
         }
 
         notify(env, ctx, repeatWeeks > 1 ? `New weekly lesson request (${booked.length}×)` : 'New lesson request',
-          `${date} ${time} (${duration} min${repeatWeeks > 1 ? `, weekly ×${booked.length}` : ''})\n` +
+          `${date} ${time} (${duration} min, ${lessonType}${motorway ? ', motorway' : ''}${repeatWeeks > 1 ? `, weekly ×${booked.length}` : ''})\n` +
           `${name} — ${house} ${postcode}\nRef ${booked[0].ref}${skipped.length ? `\nSkipped (unavailable): ${skipped.join(', ')}` : ''}`);
 
         return json({
@@ -596,9 +628,11 @@ export default {
           ).bind(fee, row.id).run();
           const nref = newRef();
           await env.DB.prepare(
-            `INSERT INTO bookings (ref, series, date, time, duration_min, price, name, email, phone, postcode, house, notes, status, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
-          ).bind(nref, null, nd, nt, row.duration_min, lessonPrice(config, row.duration_min),
+            `INSERT INTO bookings (ref, series, date, time, duration_min, price, lesson_type, motorway, name, email, phone, postcode, house, notes, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
+          ).bind(nref, null, nd, nt, row.duration_min,
+            lessonPrice(config, row.duration_min, row.lesson_type || 'manual'),
+            row.lesson_type || 'manual', row.motorway || 0,
             row.name, row.email, row.phone, row.postcode, row.house || '', row.notes || '',
             Math.floor(Date.now() / 1000)).run();
           notify(env, ctx, late ? 'Lesson moved by pupil (late)' : 'Lesson moved by pupil',
@@ -689,11 +723,13 @@ export default {
           const house = String(b.house || '').trim().slice(0, 30);
           const notes = String(b.notes || '').slice(0, 500);
           const status = b.status === 'pending' ? 'pending' : 'confirmed';
+          const abType = LESSON_TYPES.includes(b.lesson_type) ? b.lesson_type : 'manual';
+          const abMotorway = b.motorway ? 1 : 0;
           const repeatWeeks = Math.min(MAX_REPEAT_WEEKS, Math.max(1, parseInt(b.repeat_weeks, 10) || 1));
           const config = await getSetting(env, 'config', DEFAULT_CONFIG);
           const priceIn = parseFloat(b.price);
           const price = Number.isFinite(priceIn) && priceIn >= 0 && priceIn <= 1000
-            ? priceIn : lessonPrice(config, duration);
+            ? priceIn : lessonPrice(config, duration, abType);
           const series = repeatWeeks > 1 ? newRef() : null;
           const nowSec = Math.floor(Date.now() / 1000);
 
@@ -711,9 +747,9 @@ export default {
             }
             const ref = newRef();
             await env.DB.prepare(
-              `INSERT INTO bookings (ref, series, date, time, duration_min, price, name, email, phone, postcode, house, notes, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            ).bind(ref, series, d, time, duration, price, name, email, phone, postcode, house, notes, status, nowSec).run();
+              `INSERT INTO bookings (ref, series, date, time, duration_min, price, lesson_type, motorway, name, email, phone, postcode, house, notes, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ).bind(ref, series, d, time, duration, price, abType, abMotorway, name, email, phone, postcode, house, notes, status, nowSec).run();
             booked.push({ date: d, ref });
           }
           return json({ ok: true, booked, skipped, price_each: price, email });
@@ -951,6 +987,9 @@ export default {
             phone: String(c.phone || '').slice(0, 30),
             email: RE_EMAIL.test(c.email || '') ? c.email : '',
             hourly_rate: num(c.hourly_rate, 0, 1000, DEFAULT_CONFIG.hourly_rate),
+            hourly_rate_auto: num(c.hourly_rate_auto, 0, 1000, DEFAULT_CONFIG.hourly_rate_auto),
+            min_duration: DURATIONS.includes(parseInt(c.min_duration, 10)) ? parseInt(c.min_duration, 10) : 60,
+            max_duration: DURATIONS.includes(parseInt(c.max_duration, 10)) ? parseInt(c.max_duration, 10) : 240,
             notice_hours: num(c.notice_hours, 0, 72, DEFAULT_CONFIG.notice_hours),
             cancel_notice_hours: num(c.cancel_notice_hours, 0, 168, DEFAULT_CONFIG.cancel_notice_hours),
             late_cancel_fee: num(c.late_cancel_fee, 0, 500, DEFAULT_CONFIG.late_cancel_fee),
