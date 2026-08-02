@@ -257,6 +257,7 @@
       </div>
       <label for="pkNotes">Anything to add? (optional)</label>
       <textarea id="pkNotes" rows="2" maxlength="500"></textarea>
+      <div class="msg warn" id="pkgHow" style="display:block; margin-top:14px"></div>
       <button class="btn" id="pkGo" type="button">Send request</button>
       <button class="btn sm" id="pkClose" type="button" style="margin-left:8px; background:none; color:var(--text); border:1.5px solid var(--border)">Cancel</button>
       <div class="msg" id="pkMsg"></div>
@@ -418,6 +419,10 @@ let CONFIG = {
   min_duration: 60, max_duration: 240, prices: { manual: {}, automatic: {} },
   notice_hours: 12, cancel_notice_hours: 24, late_cancel_fee: 44,
   horizon_days: 21, durations: [30, 60, 90, 120, 150, 180, 210, 240],
+  packages: {
+    beginner: { label: 'Beginner Package', minutes: 300, price: 190 },
+    mock: { label: 'Mock Test', minutes: 120, price: 95 },
+  },
 };
 const state = { duration: 60, type: 'manual', date: null, time: null, slots: {}, portal: null, portalAuth: null };
 const priceOf = d => CONFIG.prices[state.type]?.[d] ??
@@ -445,6 +450,11 @@ document.querySelectorAll('[data-pkg]').forEach(b => b.addEventListener('click',
   $('pkgDesc').textContent = curPkg === 'beginner'
     ? `£${info.price} for 5 hours of lesson time — once accepted, the hours land on your account and you pay the instructor directly.`
     : `£${info.price} for a 2-hour mock test with an independent ADI — the instructor will arrange the time with you.`;
+  const hrs = fmtLen(info.minutes || 0);
+  $('pkgHow').innerHTML = '<b>How it works:</b> this is a request for the package itself, not for a lesson time. ' +
+    `Once the instructor approves it, your ${hrs} of lesson time are added to your account and ` +
+    '<b>you book each lesson yourself on the Book page</b>, choosing the days and times that suit you. ' +
+    'Your lessons are then covered by the package instead of being charged individually.';
   const signedIn = !!(SESSION && state.portal);
   $('pkgIdentity').style.display = signedIn ? 'none' : 'block';
   const pa = $('pkgAs');
