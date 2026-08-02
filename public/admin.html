@@ -623,7 +623,7 @@ async function loadPackages() {
     const info = j.packages[r.package] || { label: r.package, price: 0, minutes: 0 };
     const row = document.createElement('div');
     row.className = 'ovrow';
-    row.innerHTML = `<span style="flex:1"><b>${esc(info.label)}</b> ${fmtMoney(info.price)} — ` +
+    row.innerHTML = `<span style="flex:1"><b>${esc(info.label)}</b> ${fmtMoney(info.price)} · ${esc(r.lesson_type || 'manual')} — ` +
       `${esc(r.name)} (${esc(r.phone)}, <span class="muted">${esc(r.email)}</span>)` +
       `${r.house || r.postcode ? ` · ${esc((r.house ? r.house + ' ' : '') + r.postcode)}` : ''}` +
       `${r.notes ? `<br><span class="muted">${esc(r.notes)}</span>` : ''}</span>`;

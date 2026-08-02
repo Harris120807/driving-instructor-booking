@@ -476,13 +476,14 @@ export default {
         const postcode = String(b.postcode || '').trim().toUpperCase().slice(0, 10);
         const house = String(b.house || '').trim().slice(0, 30);
         const notes = String(b.notes || '').slice(0, 500);
+        const pkType = LESSON_TYPES.includes(b.lesson_type) ? b.lesson_type : 'manual';
         await env.DB.prepare(
-          `INSERT INTO package_requests (package, name, email, phone, postcode, house, notes, status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
-        ).bind(b.package, name, email.toLowerCase(), phone, postcode, house, notes,
+          `INSERT INTO package_requests (package, lesson_type, name, email, phone, postcode, house, notes, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
+        ).bind(b.package, pkType, name, email.toLowerCase(), phone, postcode, house, notes,
           Math.floor(Date.now() / 1000)).run();
         notify(env, ctx, `Package request: ${pkg.label}`,
-          `${name} — ${phone}\n£${pkg.price} · review in the console`);
+          `${name} — ${phone} · ${pkType}\n£${pkg.price} · review in the console`);
         return json({ ok: true, package: pkg.label });
       }
 

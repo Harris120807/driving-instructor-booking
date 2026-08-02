@@ -78,6 +78,7 @@ CREATE INDEX IF NOT EXISTS idx_charges_email ON charges(email);
 CREATE TABLE IF NOT EXISTS package_requests (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   package    TEXT NOT NULL,                  -- key into the PACKAGES map in worker.js
+  lesson_type TEXT NOT NULL DEFAULT 'manual', -- manual | automatic
   name       TEXT NOT NULL,
   email      TEXT NOT NULL,
   phone      TEXT NOT NULL,

@@ -239,6 +239,10 @@
     <div class="card" id="pkgPanel" style="display:none">
       <h2 id="pkgTitle">Request package</h2>
       <p class="muted" id="pkgDesc"></p>
+      <div class="seg" id="pkgTypeSeg">
+        <button type="button" data-pktype="manual" class="sel">Manual</button>
+        <button type="button" data-pktype="automatic">Automatic</button>
+      </div>
       <p class="muted" id="pkgAs" style="display:none"></p>
       <div id="pkgIdentity">
         <div class="row2">
@@ -426,7 +430,13 @@ const fmtLen = m => {
 const fmtH = m => `${Math.floor(m / 60)}${m % 60 === 30 ? '½' : ''}h`;
 
 // --- package requests ---
-let curPkg = null;
+let curPkg = null, pkgType = 'manual';
+$('pkgTypeSeg').addEventListener('click', e => {
+  const b = e.target.closest('button[data-pktype]');
+  if (!b) return;
+  pkgType = b.dataset.pktype;
+  for (const x of $('pkgTypeSeg').children) x.classList.toggle('sel', x === b);
+});
 document.querySelectorAll('[data-pkg]').forEach(b => b.addEventListener('click', () => {
   curPkg = b.dataset.pkg;
   const info = CONFIG.packages?.[curPkg] || { label: 'Package', price: 0 };
@@ -459,7 +469,7 @@ $('pkGo').onclick = async () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(signedIn ? { Authorization: 'Bearer ' + SESSION } : {}) },
       body: JSON.stringify({
-        package: curPkg,
+        package: curPkg, lesson_type: pkgType,
         name: $('pkName').value.trim(), email: $('pkEmail').value.trim(),
         phone: $('pkPhone').value.trim(), house: $('pkHouse').value.trim(),
         postcode: $('pkPostcode').value.trim(), notes: $('pkNotes').value.trim(),
