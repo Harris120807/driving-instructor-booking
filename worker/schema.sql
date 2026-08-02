@@ -52,8 +52,10 @@ CREATE TABLE IF NOT EXISTS students (
   notes      TEXT NOT NULL DEFAULT '',
   passed     INTEGER NOT NULL DEFAULT 0,     -- 1 = passed their test (hidden from default list)
   credit     REAL NOT NULL DEFAULT 0,        -- £ prepaid balance
+  test_date  TEXT,                           -- pupil-entered driving test date (YYYY-MM-DD)
   updated_at INTEGER
 );
+-- Existing deployments: ALTER TABLE students ADD COLUMN test_date TEXT;
 
 -- Pupil login accounts (signup requires a booking ref as proof of identity —
 -- there is no email-verification service on this project)

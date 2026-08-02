@@ -333,10 +333,11 @@ async function studentMeta(env, email) {
 
 async function putStudentMeta(env, m) {
   await env.DB.prepare(
-    `INSERT INTO students (email, notes, passed, credit, updated_at) VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO students (email, notes, passed, credit, test_date, updated_at) VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(email) DO UPDATE SET notes = excluded.notes, passed = excluded.passed,
-       credit = excluded.credit, updated_at = excluded.updated_at`
-  ).bind(m.email, m.notes || '', m.passed ? 1 : 0, m.credit || 0, Math.floor(Date.now() / 1000)).run();
+       credit = excluded.credit, test_date = excluded.test_date, updated_at = excluded.updated_at`
+  ).bind(m.email, m.notes || '', m.passed ? 1 : 0, m.credit || 0, m.test_date || null,
+    Math.floor(Date.now() / 1000)).run();
 }
 
 // Full account picture for one pupil (shared by /me/lessons and the console)
@@ -357,7 +358,8 @@ async function accountFor(env, email) {
     postcode: lastRow ? lastRow.postcode : '', house: lastRow ? (lastRow.house || '') : '',
     lessons, gross_owed: gross, credit: meta.credit || 0,
     owed: Math.max(0, gross - (meta.credit || 0)),
-    upcoming_cost: upcoming, passed: !!meta.passed, meta,
+    upcoming_cost: upcoming, passed: !!meta.passed,
+    test_date: meta.test_date || null, meta,
   };
 }
 
@@ -553,9 +555,56 @@ export default {
             email, name: acc.name, postcode: acc.postcode, house: acc.house,
             lessons: acc.lessons,
             owed: acc.owed, gross_owed: acc.gross_owed, credit: acc.credit,
-            upcoming_cost: acc.upcoming_cost, passed: acc.passed,
+            upcoming_cost: acc.upcoming_cost, passed: acc.passed, test_date: acc.test_date,
             cancel_notice_hours: config.cancel_notice_hours, late_cancel_fee: config.late_cancel_fee,
           });
+        }
+
+        if (path === '/me/test-date' && req.method === 'POST') {
+          const b = await readBody(req);
+          const td = b?.date ? String(b.date) : null;
+          if (td && !RE_DATE.test(td)) return json({ error: 'bad date' }, 400);
+          const m = await studentMeta(env, email);
+          m.test_date = td;
+          await putStudentMeta(env, { ...m, email });
+          return json({ ok: true, test_date: td });
+        }
+
+        // Move a lesson to a new open slot. The original becomes a student
+        // cancellation (late fee applies if inside the notice window) and the
+        // lesson re-books as a fresh pending request the instructor confirms.
+        if (path === '/me/reschedule' && req.method === 'POST') {
+          const b = await readBody(req);
+          const ref = String(b?.ref || '').trim().toUpperCase();
+          const nd = b?.date, nt = b?.time;
+          if (!ref || !RE_DATE.test(nd || '') || !RE_TIME.test(nt || '')) return json({ error: 'bad request' }, 400);
+          const row = await env.DB.prepare(
+            'SELECT * FROM bookings WHERE ref = ? AND email = ?').bind(ref, email).first();
+          if (!row) return json({ error: 'No such lesson on your account.' }, 404);
+          if (row.status === 'cancelled') return json({ error: 'That lesson is cancelled — book a new one instead.' }, 409);
+          const now = ukNowParts();
+          if (lessonPast(now, row)) return json({ error: 'That lesson has already taken place.' }, 409);
+          const open = await openSlots(env, nd, nd, row.duration_min);
+          if (!(open[nd] || []).includes(nt))
+            return json({ error: 'That new time is not available — pick another.' }, 409);
+
+          const config = await getSetting(env, 'config', DEFAULT_CONFIG);
+          const late = minsUntil(now, row.date, row.time) < config.cancel_notice_hours * 60;
+          const fee = late ? config.late_cancel_fee : 0;
+          await env.DB.prepare(
+            "UPDATE bookings SET status = 'cancelled', cancelled_by = 'student', fee = ?, paid = 0 WHERE id = ?"
+          ).bind(fee, row.id).run();
+          const nref = newRef();
+          await env.DB.prepare(
+            `INSERT INTO bookings (ref, series, date, time, duration_min, price, name, email, phone, postcode, house, notes, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
+          ).bind(nref, null, nd, nt, row.duration_min, lessonPrice(config, row.duration_min),
+            row.name, row.email, row.phone, row.postcode, row.house || '', row.notes || '',
+            Math.floor(Date.now() / 1000)).run();
+          notify(env, ctx, late ? 'Lesson moved by pupil (late)' : 'Lesson moved by pupil',
+            `${row.date} ${row.time} → ${nd} ${nt}\n${row.name}` +
+            (late ? `\nLate fee £${fee} added for the original slot` : ''));
+          return json({ ok: true, ref: nref, late, fee });
         }
 
         if (path === '/me/cancel' && req.method === 'POST') {
@@ -584,6 +633,38 @@ export default {
       // ---- admin ----
       if (path.startsWith('/admin/')) {
         if (!(await isAdmin(req, env))) return json({ error: 'unauthorized' }, 401);
+
+        // Console KPIs: booked/collected money + outstanding + pending count
+        if (path === '/admin/summary' && req.method === 'GET') {
+          const rows = (await env.DB.prepare('SELECT * FROM bookings').all()).results;
+          const metas = (await env.DB.prepare('SELECT * FROM students').all()).results;
+          const now = ukNowParts();
+          const dow = (new Date(now.date + 'T12:00:00Z').getUTCDay() + 6) % 7; // 0 = Monday
+          const weekStart = addDays(now.date, -dow), weekEnd = addDays(weekStart, 6);
+          const month = now.date.slice(0, 7);
+          let weekBooked = 0, monthBooked = 0, monthCollected = 0, pending = 0;
+          const gross = new Map();
+          for (const r of rows) {
+            if (r.status === 'pending' && !lessonPast(now, r)) pending++;
+            if (r.status !== 'cancelled') {
+              if (r.date >= weekStart && r.date <= weekEnd) weekBooked += r.price;
+              if (r.date.startsWith(month)) {
+                monthBooked += r.price;
+                if (r.paid) monthCollected += r.price;
+              }
+            } else if (r.fee > 0 && r.paid && r.date.startsWith(month)) {
+              monthCollected += r.fee;
+            }
+            gross.set(r.email, (gross.get(r.email) || 0) + owedOf(now, r));
+          }
+          const creditBy = new Map(metas.map(m => [m.email, m.credit || 0]));
+          let outstanding = 0;
+          for (const [em, g] of gross) outstanding += Math.max(0, g - (creditBy.get(em) || 0));
+          return json({
+            week_booked: weekBooked, month_booked: monthBooked,
+            month_collected: monthCollected, outstanding, pending,
+          });
+        }
 
         if (path === '/admin/bookings' && req.method === 'GET') {
           const status = url.searchParams.get('status');
@@ -676,6 +757,7 @@ export default {
             const m = metas.get(s.email) || {};
             s.credit = m.credit || 0;
             s.passed = !!m.passed;
+            s.test_date = m.test_date || null;
             s.has_notes = !!(m.notes && m.notes.trim());
             s.owed = Math.max(0, s.gross_owed - s.credit);
             return s;
@@ -696,7 +778,8 @@ export default {
             'SELECT email FROM users WHERE email = ?').bind(email).first());
           return json({
             lessons: rows.map(r => ({ ...r, past: lessonPast(now, r), owed_now: owedOf(now, r) })),
-            meta: { notes: meta.notes || '', passed: !!meta.passed, credit: meta.credit || 0 },
+            meta: { notes: meta.notes || '', passed: !!meta.passed, credit: meta.credit || 0,
+              test_date: meta.test_date || null },
             gross_owed: gross, owed: Math.max(0, gross - (meta.credit || 0)),
             has_account: hasAccount,
           });

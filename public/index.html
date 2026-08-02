@@ -201,6 +201,7 @@
       </select>
       <label for="fNotes">Anything I should know? (optional)</label>
       <textarea id="fNotes" rows="2" maxlength="500" placeholder="e.g. test booked for September, nervous beginner, prefer quiet roads first"></textarea>
+      <p class="muted" id="policyLine"></p>
       <button class="btn" id="submitBtn" type="submit" disabled>Request booking</button>
       <div class="msg" id="msg"></div>
       <p class="muted">Your request is sent to the instructor to confirm — you’ll get a reference code straight away and a confirmation by phone or email. No payment is taken online; lessons are paid directly to the instructor.</p>
@@ -238,11 +239,26 @@
         <div class="tot"><div class="v" id="tCredit">£0</div><div class="l">Lesson credit</div></div>
         <div class="tot"><div class="v" id="tUpcoming">£0</div><div class="l">Upcoming lessons cost</div></div>
       </div>
+      <div class="row2" style="align-items:end; margin-bottom:12px">
+        <div><label for="tdInput" class="muted" style="font-size:.85rem">My driving test date (optional — your instructor plans around it)</label>
+          <input type="date" id="tdInput"></div>
+        <div><button class="btn sm" id="tdSave" type="button">Save test date</button>
+          <span class="muted" id="tdCount" style="margin-left:8px"></span></div>
+      </div>
       <div style="overflow-x:auto">
         <table>
           <thead><tr><th>When</th><th>Length</th><th>Price</th><th>Status</th><th></th></tr></thead>
           <tbody id="portalBody"></tbody>
         </table>
+      </div>
+      <div id="movePanel" style="display:none; margin-top:12px; border:1.5px solid var(--border); border-radius:10px; padding:12px">
+        <b id="mvTitle"></b>
+        <div class="row2" style="margin-top:8px">
+          <div><label for="mvDate">New day</label><select id="mvDate"></select></div>
+          <div><label for="mvTime">New time</label><select id="mvTime"></select></div>
+        </div>
+        <button class="btn sm" id="mvGo" type="button" style="margin-top:10px">Confirm move</button>
+        <button class="btn sm" id="mvClose" type="button" style="margin-top:10px; margin-left:8px; background:none; color:var(--text); border:1.5px solid var(--border)">Never mind</button>
       </div>
       <p class="muted" id="portalNote"></p>
       <div class="msg" id="mMsg"></div>
@@ -320,6 +336,9 @@ async function loadConfig() {
   $('fContact').textContent = [CONFIG.phone, CONFIG.email].filter(Boolean).join(' · ');
   $('horizonNote').textContent =
     `Bookings open up to ${CONFIG.horizon_days} days ahead (minimum ${CONFIG.notice_hours}h notice to book). All times UK.`;
+  $('policyLine').textContent =
+    `By requesting a booking you accept the cancellation policy: cancelling or moving a lesson less than ` +
+    `${CONFIG.cancel_notice_hours} hours before it starts incurs a ${fmtMoney(CONFIG.late_cancel_fee)} last-minute fee.`;
   // Fill any price gaps from the hourly rate (server sends the full map; demo doesn't)
   for (const d of CONFIG.durations)
     CONFIG.prices[d] = CONFIG.prices[d] ?? Math.round(CONFIG.hourly_rate * d / 60 * 100) / 100;
@@ -576,15 +595,113 @@ function renderPortal() {
       `<td><span class="st ${l.status}">${statusText}</span></td>` +
       `<td></td>`;
     if (!l.past && l.status !== 'cancelled') {
+      const mv = document.createElement('button');
+      mv.className = 'btn sm';
+      mv.style.margin = '2px';
+      mv.textContent = 'Move';
+      mv.onclick = () => startMove(l);
+      tr.lastElementChild.appendChild(mv);
       const btn = document.createElement('button');
       btn.className = 'btn sm danger';
+      btn.style.margin = '2px';
       btn.textContent = 'Cancel';
       btn.onclick = () => cancelLesson(l);
       tr.lastElementChild.appendChild(btn);
     }
     tb.appendChild(tr);
   }
+  // test-date field + countdown
+  $('tdInput').value = j.test_date || '';
+  renderTestCountdown(j.test_date);
 }
+
+function renderTestCountdown(td) {
+  const el = $('tdCount');
+  if (!td) { el.textContent = ''; return; }
+  const days = Math.round((new Date(td + 'T12:00:00') - new Date()) / 86400000);
+  el.textContent = days > 1 ? `${days} days to go 🚗` : days === 1 ? 'Tomorrow — good luck! 🚗'
+    : days === 0 ? 'Today — good luck! 🍀' : 'Test date has passed — update it?';
+}
+
+$('tdSave').onclick = async () => {
+  const m = $('mMsg'); m.className = 'msg';
+  const date = $('tdInput').value || null;
+  try {
+    if (!DEMO) await api('/me/test-date', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + SESSION },
+      body: JSON.stringify({ date }),
+    });
+    if (state.portal) state.portal.test_date = date;
+    renderTestCountdown(date);
+    m.className = 'msg ok';
+    m.textContent = date ? 'Test date saved — your instructor can see it too.' : 'Test date cleared.';
+  } catch (err) { m.className = 'msg err'; m.textContent = err.message; }
+};
+
+// --- move (reschedule) a lesson ---
+let moving = null, moveSlots = {};
+
+async function startMove(l) {
+  moving = l;
+  $('movePanel').style.display = 'block';
+  $('mvTitle').textContent =
+    `Moving your ${fmtLen(l.duration_min)} lesson on ${new Date(l.date + 'T12:00:00')
+      .toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })} at ${l.time}`;
+  const today = new Date().toISOString().slice(0, 10);
+  const end = new Date(); end.setDate(end.getDate() + CONFIG.horizon_days);
+  if (DEMO) moveSlots = demoSlots();
+  else {
+    try {
+      moveSlots = (await api(`/api/slots?from=${today}&to=${end.toISOString().slice(0, 10)}&duration=${l.duration_min}`)).slots || {};
+    } catch { moveSlots = {}; }
+  }
+  const dSel = $('mvDate'); dSel.innerHTML = '';
+  for (const ds of Object.keys(moveSlots)) {
+    const o = document.createElement('option');
+    o.value = ds;
+    o.textContent = new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    dSel.appendChild(o);
+  }
+  fillMoveTimes();
+  $('movePanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function fillMoveTimes() {
+  const tSel = $('mvTime'); tSel.innerHTML = '';
+  for (const t of moveSlots[$('mvDate').value] || []) {
+    const o = document.createElement('option');
+    o.value = o.textContent = t;
+    tSel.appendChild(o);
+  }
+}
+$('mvDate').addEventListener('change', fillMoveTimes);
+$('mvClose').onclick = () => { $('movePanel').style.display = 'none'; moving = null; };
+
+$('mvGo').onclick = async () => {
+  if (!moving || !$('mvDate').value || !$('mvTime').value) return;
+  const j = state.portal;
+  const late = (new Date(moving.date + 'T' + moving.time) - new Date()) < j.cancel_notice_hours * 3600000;
+  const warning = late
+    ? `You are moving this lesson within the minimum notice period (${j.cancel_notice_hours} hours) — you will owe a last-minute cancellation fee of ${fmtMoney(j.late_cancel_fee)} for the original time.\n\nMove this lesson?`
+    : `You are moving this lesson before the minimum notice period (${j.cancel_notice_hours} hours) — you will not owe any money for the original time.\n\nMove this lesson?`;
+  if (!confirm(warning)) return;
+  const m = $('mMsg'); m.className = 'msg';
+  try {
+    let res = { late, fee: late ? j.late_cancel_fee : 0, ref: 'DEMO42' };
+    if (!DEMO) res = await api('/me/reschedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + SESSION },
+      body: JSON.stringify({ ref: moving.ref, date: $('mvDate').value, time: $('mvTime').value }),
+    });
+    m.className = res.late ? 'msg warn' : 'msg ok';
+    m.textContent = `Lesson moved — new reference ${res.ref}. It's a pending request until the instructor confirms.` +
+      (res.late ? ` A ${fmtMoney(res.fee)} last-minute fee applies to the original time.` : '');
+    $('movePanel').style.display = 'none';
+    moving = null;
+    if (!DEMO) loadMe();
+  } catch (err) { m.className = 'msg err'; m.textContent = err.message; }
+};
 
 async function cancelLesson(l) {
   const j = state.portal;
