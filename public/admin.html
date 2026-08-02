@@ -252,7 +252,9 @@
               </div>
             </div>
             <div class="field"><label style="display:flex; gap:7px; align-items:center">
-              <input type="checkbox" id="abMotorway" style="width:auto"> Motorway lesson</label></div>
+              <input type="checkbox" id="abMotorway" style="width:auto"> Motorway lesson</label>
+              <label style="display:flex; gap:7px; align-items:center">
+              <input type="checkbox" id="abMock" style="width:auto"> Mock test</label></div>
             <div class="field">
               <label>Booking status</label>
               <div class="filters" style="margin-bottom:2px">
@@ -359,7 +361,14 @@
               <button class="btn sm" id="sdHoursAdd">Add</button>
               <button class="btn ghost sm" id="sdHoursSub">Deduct</button>
             </div>
-            <p class="muted">“Pay from credit” settles a lesson with money credit; “Cover from hours” uses lesson-time credit instead.</p>
+            <div class="field" style="margin-top:10px"><label>Mock tests prepaid</label>
+              <div style="font-size:1.3rem;font-weight:700" id="sdCreditMock">0</div></div>
+            <div class="ovrow">
+              <input type="number" id="sdMockAmt" step="1" min="0" placeholder="mock tests" style="width:110px">
+              <button class="btn sm" id="sdMockAdd">Add</button>
+              <button class="btn ghost sm" id="sdMockSub">Deduct</button>
+            </div>
+            <p class="muted">“Pay from credit” uses money; “Cover from hours” uses lesson time; a mock test can be covered from the mock-test balance instead.</p>
           </div>
         </div>
         <div id="sdCharges" style="display:none; margin-bottom:12px">
@@ -442,6 +451,18 @@
             <input id="sPkgMock" type="number" min="0" step="1"></div>
         </div>
         <div class="field"><div class="hint">Shown on the site’s Packages card; used when you accept a package request.</div></div>
+        <h2 style="margin-top:18px">Motorway lessons</h2>
+        <div class="prices3">
+          <div class="field"><label for="sMwLen">Set length</label>
+            <select id="sMwLen">
+              <option value="60">1 hour</option><option value="90">1½ hours</option>
+              <option value="120">2 hours</option><option value="150">2½ hours</option>
+              <option value="180">3 hours</option><option value="240">4 hours</option>
+            </select></div>
+          <div class="field"><label for="sMwPrice">Price (£)</label>
+            <input id="sMwPrice" type="number" min="0" step="1"></div>
+        </div>
+        <div class="field"><div class="hint">Pupils choosing “Motorway lesson” get this fixed length and just pick a slot. Leave the price at 0 to charge your normal rate for that length.</div></div>
         <h2 style="margin-top:18px">Booking rules</h2>
         <div class="field">
           <label for="sNotice">Minimum notice to <b>book</b> (hours)</label>
@@ -731,7 +752,7 @@ function bookingRow(b, compact) {
   const tr = document.createElement('tr');
   tr.innerHTML =
     `<td><b>${fmtWhen(b.date)}</b> ${b.time}</td>` +
-    `<td>${b.duration_min}min${b.lesson_type === 'automatic' ? ' auto' : ''}${b.motorway ? '<br><span class="muted">motorway</span>' : ''}</td>` +
+    `<td>${b.duration_min}min${b.lesson_type === 'automatic' ? ' auto' : ''}${b.motorway ? '<br><span class="muted">motorway</span>' : ''}${b.mock ? '<br><span class="muted">mock test</span>' : ''}</td>` +
     (compact ? '<td colspan="3" class="muted">↻ part of the weekly series</td>'
       : `<td>${esc(b.name)}${b.notes ? `<br><span class="muted">${esc(b.notes)}</span>` : ''}</td>` +
         `<td>${esc(b.phone)}<br><span class="muted">${esc(b.email)}</span></td>` +
@@ -891,7 +912,7 @@ $('abGo').onclick = async () => {
     date: $('abDate').value, time: $('abTime').value,
     duration: parseInt($('abDur').value, 10),
     price: parseFloat($('abPrice').value),
-    lesson_type: abType, motorway: $('abMotorway').checked,
+    lesson_type: abType, motorway: $('abMotorway').checked, mock: $('abMock').checked,
     repeat_weeks: parseInt($('abRepeat').value, 10),
     status: abStatus,
     name: $('abName').value.trim(), phone: $('abPhone').value.trim(),
@@ -943,7 +964,8 @@ async function loadStudents() {
       `<td><b>${esc(s.name)}</b>${s.has_notes ? ' 📝' : ''}<br><span class="muted">${esc((s.house ? s.house + ' ' : '') + s.postcode)}</span></td>` +
       `<td>${esc(s.phone)}<br><span class="muted">${esc(s.email)}</span></td>` +
       `<td>${s.lessons}</td><td>${s.upcoming}</td><td>${fmtMoney(s.upcoming_cost)}</td>` +
-      `<td>${fmtMoney(s.credit)}${s.credit_min ? `<br><span class="muted">${fmtH(s.credit_min)} time</span>` : ''}</td>` +
+      `<td>${fmtMoney(s.credit)}${s.credit_min ? `<br><span class="muted">${fmtH(s.credit_min)} time</span>` : ''}` +
+        `${s.credit_mock ? `<br><span class="muted">${s.credit_mock}× mock</span>` : ''}</td>` +
       `<td>${s.owed > 0 ? `<span class="owed">${fmtMoney(s.owed)}</span>` : fmtMoney(0)}</td>` +
       `<td>${testCell(s.test_date)}</td>`;
     tr.onclick = () => loadStudent(s);
@@ -979,6 +1001,7 @@ async function loadStudent(s) {
   $('sdNotes').value = meta.notes;
   $('sdCredit').textContent = fmtMoney(meta.credit);
   $('sdCreditMin').textContent = fmtH(meta.credit_min || 0);
+  $('sdCreditMock').textContent = meta.credit_mock || 0;
   $('sdPassed').textContent = meta.passed ? '🎉 Passed — move back to Active' : 'Mark as passed';
   $('sdAccount').textContent = (hasAccount
     ? 'Has an online account (can sign in to see lessons and owed money).'
@@ -1044,6 +1067,23 @@ async function loadStudent(s) {
   };
   $('sdHoursAdd').onclick = adjustHours(1);
   $('sdHoursSub').onclick = adjustHours(-1);
+  const adjustMock = sign => async () => {
+    const n = parseInt($('sdMockAmt').value, 10);
+    if (!Number.isFinite(n) || n <= 0) { err($('sdMsg'), 'Enter how many mock tests.'); return; }
+    try {
+      const j = await api('/admin/credit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: s.email, delta: sign * n, unit: 'mock' }),
+      });
+      meta.credit_mock = j.credit_mock;
+      $('sdCreditMock').textContent = meta.credit_mock;
+      $('sdMockAmt').value = '';
+      ok($('sdMsg'), 'Mock-test credit updated.');
+      loadStudents();
+    } catch (e) { err($('sdMsg'), e.message); }
+  };
+  $('sdMockAdd').onclick = adjustMock(1);
+  $('sdMockSub').onclick = adjustMock(-1);
 
   // package charges
   $('sdCharges').style.display = charges.length ? 'block' : 'none';
@@ -1129,6 +1169,23 @@ async function loadStudent(s) {
           } catch (e) { err($('sdMsg'), e.message); }
         };
         cell.appendChild(ph);
+      }
+      if (!l.paid && l.status !== 'cancelled' && l.mock && (meta.credit_mock || 0) >= 1) {
+        const pm = document.createElement('button');
+        pm.className = 'btn ghost sm';
+        pm.style.marginLeft = '6px';
+        pm.textContent = 'Use mock-test credit';
+        pm.onclick = async () => {
+          try {
+            const j = await api('/admin/cover-from-hours', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: l.id, unit: 'mock' }),
+            });
+            ok($('sdMsg'), `Covered from mock-test credit (${j.credit_mock} left).`);
+            loadStudent(s); loadStudents();
+          } catch (e) { err($('sdMsg'), e.message); }
+        };
+        cell.appendChild(pm);
       }
     } else cell.innerHTML = '<span class="muted">—</span>';
     tb.appendChild(tr);
@@ -1314,7 +1371,7 @@ function showCalDetail(b) {
   const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
   $('cdBody').innerHTML =
     row('Lesson', `${b.duration_min} min · ${b.lesson_type === 'automatic' ? 'automatic' : 'manual'}` +
-      `${b.motorway ? ' · motorway' : ''} · ${fmtMoney(b.price)}${b.series ? ' · <span class="wk">↻ weekly</span>' : ''}`) +
+      `${b.motorway ? ' · motorway' : ''}${b.mock ? ' · MOCK TEST' : ''} · ${fmtMoney(b.price)}${b.series ? ' · <span class="wk">↻ weekly</span>' : ''}`) +
     row('Status', `<span class="st ${b.status}">${b.status}${b.cancelled_by === 'instructor' ? ' (you)' : ''}</span>` +
       (b.fee > 0 ? ` <span class="owed">fee ${fmtMoney(b.fee)}${b.paid ? ' paid' : ' owed'}</span>` : '')) +
     row('Pickup', esc((b.house ? b.house + ' ' : '') + b.postcode)) +
@@ -1490,6 +1547,8 @@ async function loadSettings() {
   $('sFee').value = c.late_cancel_fee; $('sHorizon').value = c.horizon_days;
   $('sPkgBeg').value = c.pkg_beginner_price ?? 190;
   $('sPkgMock').value = c.pkg_mock_price ?? 95;
+  $('sMwLen').value = String(c.motorway_minutes ?? 120);
+  $('sMwPrice').value = c.motorway_price ?? 0;
   $('consTitle').textContent = c.name + ' — console';
   RATE = parseFloat($('sRate').value) || 44;
   RATE_AUTO = parseFloat($('sRateAuto').value) || 46;
@@ -1505,6 +1564,8 @@ $('saveSettings').onclick = async () => {
     max_duration: parseInt($('sMaxLen').value, 10),
     pkg_beginner_price: parseFloat($('sPkgBeg').value),
     pkg_mock_price: parseFloat($('sPkgMock').value),
+    motorway_minutes: parseInt($('sMwLen').value, 10),
+    motorway_price: parseFloat($('sMwPrice').value),
     notice_hours: parseFloat($('sNotice').value),
     cancel_notice_hours: parseFloat($('sCancelNotice').value),
     late_cancel_fee: parseFloat($('sFee').value),

@@ -167,6 +167,11 @@
     padding: 7px 16px; cursor: pointer;
   }
   .seg button.sel { background: var(--accent); color: #fff; }
+  .mwbtn {
+    border: 1.5px solid var(--border); background: none; color: var(--text); font: inherit;
+    border-radius: 999px; padding: 8px 18px; cursor: pointer;
+  }
+  .mwbtn.sel { background: var(--accent); color: #fff; border-color: var(--accent); }
   .topline { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
   .totals { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
   .tot {
@@ -268,14 +273,21 @@
   <div class="view" id="view-book">
   <div class="card">
     <h2>1 · Choose your lesson</h2>
-    <div class="seg" id="typeSeg">
-      <button type="button" data-type="manual" class="sel">Manual</button>
-      <button type="button" data-type="automatic">Automatic</button>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center">
+      <div class="seg" id="typeSeg" style="margin-bottom:0">
+        <button type="button" data-type="manual" class="sel">Manual</button>
+        <button type="button" data-type="automatic">Automatic</button>
+      </div>
+      <button type="button" class="mwbtn" id="mwToggle">Motorway lesson</button>
+      <button type="button" class="mwbtn" id="mockToggle">Mock test</button>
     </div>
-    <input type="range" id="lenSlider" min="60" max="240" step="30" value="60"
-      style="width:100%; accent-color: var(--accent)" aria-label="Lesson length">
-    <div style="display:flex; justify-content:space-between" class="muted"><span id="lenMin">1 hour</span><span id="lenMax">4 hours</span></div>
+    <div id="lenWrap" style="margin-top:12px">
+      <input type="range" id="lenSlider" min="60" max="240" step="30" value="60"
+        style="width:100%; accent-color: var(--accent)" aria-label="Lesson length">
+      <div style="display:flex; justify-content:space-between" class="muted"><span id="lenMin">1 hour</span><span id="lenMax">4 hours</span></div>
+    </div>
     <div style="margin-top:8px; font-size:1.15rem"><b id="lenLabel">1 hour</b> · <b id="lenPrice">£44</b> <span class="muted" id="lenType">manual lesson</span></div>
+    <p class="muted" id="mwNote" style="display:none">Motorway lessons are a set length — just pick a day and time below. For licence holders building post-test confidence.</p>
   </div>
 
   <div class="card">
@@ -302,10 +314,6 @@
         <div><label for="fPostcode">Pickup postcode</label><input id="fPostcode" required maxlength="10" placeholder="e.g. LS1 4AB" autocomplete="postal-code"></div>
         <div></div>
       </div>
-      <label style="margin-top:12px; display:flex; gap:8px; align-items:center; color:var(--text); font-size:.95rem">
-        <input type="checkbox" id="fMotorway" style="width:auto"> Motorway lesson
-        <span class="muted">(for licence holders — post-test confidence)</span>
-      </label>
       <label for="fRepeat">Repeat weekly?</label>
       <select id="fRepeat">
         <option value="1">Just this lesson</option>
@@ -355,6 +363,7 @@
         <div class="tot owe"><div class="v" id="tOwed">£0</div><div class="l">Money owed</div></div>
         <div class="tot"><div class="v" id="tCredit">£0</div><div class="l">Money credit</div></div>
         <div class="tot" id="tHoursWrap" style="display:none"><div class="v" id="tHours">0h</div><div class="l">Lesson time credit</div></div>
+        <div class="tot" id="tMwWrap" style="display:none"><div class="v" id="tMw">0</div><div class="l">Mock tests left</div></div>
         <div class="tot"><div class="v" id="tUpcoming">£0</div><div class="l">Upcoming lessons cost</div></div>
       </div>
       <div class="msg warn" id="chargesLine" style="display:none; margin-bottom:12px"></div>
@@ -423,10 +432,18 @@ let CONFIG = {
     beginner: { label: 'Beginner Package', minutes: 300, price: 190 },
     mock: { label: 'Mock Test', minutes: 120, price: 95 },
   },
+  motorway: { minutes: 120, price: { manual: 88, automatic: 92 } },
 };
-const state = { duration: 60, type: 'manual', date: null, time: null, slots: {}, portal: null, portalAuth: null };
-const priceOf = d => CONFIG.prices[state.type]?.[d] ??
-  Math.round((state.type === 'automatic' ? CONFIG.hourly_rate_auto : CONFIG.hourly_rate) * d / 60 * 100) / 100;
+const state = { duration: 60, type: 'manual', product: 'lesson', date: null, time: null,
+  slots: {}, portal: null, portalAuth: null };
+const priceOf = d =>
+  state.product === 'motorway' ? (CONFIG.motorway?.price?.[state.type] ?? 0) :
+  state.product === 'mock' ? (CONFIG.packages?.mock?.price ?? 0) :
+  (CONFIG.prices[state.type]?.[d] ??
+   Math.round((state.type === 'automatic' ? CONFIG.hourly_rate_auto : CONFIG.hourly_rate) * d / 60 * 100) / 100);
+const productMinutes = p => p === 'motorway' ? (CONFIG.motorway?.minutes || 120)
+  : p === 'mock' ? (CONFIG.packages?.mock?.minutes || 120)
+  : Math.min(CONFIG.max_duration, Math.max(CONFIG.min_duration, 60));
 
 const fmtLen = m => {
   const h = Math.floor(m / 60), half = m % 60 === 30;
@@ -550,15 +567,27 @@ async function loadConfig() {
   s.min = CONFIG.min_duration; s.max = CONFIG.max_duration;
   $('lenMin').textContent = fmtLen(CONFIG.min_duration);
   $('lenMax').textContent = fmtLen(CONFIG.max_duration);
-  state.duration = Math.min(CONFIG.max_duration, Math.max(CONFIG.min_duration, state.duration));
-  s.value = state.duration;
+  if (state.product === 'lesson') {
+    state.duration = Math.min(CONFIG.max_duration, Math.max(CONFIG.min_duration, state.duration));
+    s.value = state.duration;
+  }
   renderLen();
 }
 
 function renderLen() {
   $('lenLabel').textContent = fmtLen(state.duration);
   $('lenPrice').textContent = fmtMoney(priceOf(state.duration));
-  $('lenType').textContent = state.type + ' lesson';
+  $('lenType').textContent =
+    state.product === 'motorway' ? `${state.type} motorway lesson`
+    : state.product === 'mock' ? 'mock test' : `${state.type} lesson`;
+  const fixed = state.product !== 'lesson';
+  $('lenWrap').style.display = fixed ? 'none' : '';
+  $('mwNote').style.display = fixed ? 'block' : 'none';
+  $('mwNote').textContent = state.product === 'mock'
+    ? 'A mock test is a set length, run like the real thing by a qualified ADI — just pick a day and time below.'
+    : 'Motorway lessons are a set length — just pick a day and time below. For licence holders building post-test confidence.';
+  $('mwToggle').classList.toggle('sel', state.product === 'motorway');
+  $('mockToggle').classList.toggle('sel', state.product === 'mock');
 }
 
 $('typeSeg').addEventListener('click', e => {
@@ -569,6 +598,19 @@ $('typeSeg').addEventListener('click', e => {
   renderLen();
   renderTimes(); // summary price/wording updates
 });
+
+// Motorway lessons and mock tests are fixed-length products: lock the
+// duration and price, keep the slot picker
+function pickProduct(p) {
+  state.product = state.product === p ? 'lesson' : p;
+  state.duration = productMinutes(state.product);
+  $('lenSlider').value = state.duration;
+  state.time = null;
+  renderLen();
+  loadSlots();
+}
+$('mwToggle').addEventListener('click', () => pickProduct('motorway'));
+$('mockToggle').addEventListener('click', () => pickProduct('mock'));
 
 $('lenSlider').addEventListener('input', () => {
   const v = parseInt($('lenSlider').value, 10);
@@ -637,7 +679,7 @@ function renderTimes() {
     const d = new Date(state.date + 'T12:00:00');
     const weeks = parseInt($('fRepeat').value, 10);
     s.style.display = 'block';
-    s.textContent = `Selected: ${fmtLen(state.duration)} ${state.type}${$('fMotorway').checked ? ' motorway' : ''} lesson — ` +
+    s.textContent = `Selected: ${state.product === 'mock' ? fmtLen(state.duration) + ' mock test' : fmtLen(state.duration) + ' ' + state.type + (state.product === 'motorway' ? ' motorway' : '') + ' lesson'} — ` +
       `${d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })} at ${state.time} · ` +
       `${fmtMoney(priceOf(state.duration))}` +
       (weeks > 1 ? ` per lesson, weekly for ${weeks} weeks` : '');
@@ -648,7 +690,6 @@ function renderTimes() {
   }
 }
 $('fRepeat').addEventListener('change', renderTimes);
-$('fMotorway').addEventListener('change', renderTimes);
 
 $('bookForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -662,7 +703,7 @@ $('bookForm').addEventListener('submit', async e => {
   $('submitBtn').disabled = true;
   const body = {
     date: state.date, time: state.time, duration: state.duration,
-    lesson_type: state.type, motorway: $('fMotorway').checked,
+    lesson_type: state.type, motorway: state.product === 'motorway', mock: state.product === 'mock',
     repeat_weeks: parseInt($('fRepeat').value, 10),
     name: $('fName').value.trim(), email: $('fEmail').value.trim(),
     phone: $('fPhone').value.trim(), postcode: $('fPostcode').value.trim(),
@@ -799,6 +840,8 @@ function renderPortal() {
   $('tCredit').textContent = fmtMoney(j.credit);
   $('tHoursWrap').style.display = j.credit_min > 0 ? '' : 'none';
   $('tHours').textContent = fmtH(j.credit_min || 0);
+  $('tMwWrap').style.display = j.credit_mock > 0 ? '' : 'none';
+  $('tMw').textContent = j.credit_mock || 0;
   $('tUpcoming').textContent = fmtMoney(j.upcoming_cost);
   const chl = $('chargesLine');
   const unpaidCh = (j.charges || []).filter(c => !c.paid);
@@ -823,7 +866,7 @@ function renderPortal() {
     else if (l.past) priceCell += l.paid ? ' · paid' : ' · owed';
     tr.innerHTML =
       `<td><b>${when}</b> ${l.time}</td>` +
-      `<td>${fmtLen(l.duration_min)}${l.lesson_type === 'automatic' ? ' · auto' : ''}${l.motorway ? ' · motorway' : ''}</td>` +
+      `<td>${l.mock ? 'Mock test' : fmtLen(l.duration_min)}${!l.mock && l.lesson_type === 'automatic' ? ' · auto' : ''}${l.motorway ? ' · motorway' : ''}</td>` +
       `<td>${priceCell}</td>` +
       `<td><span class="st ${l.status}">${statusText}</span></td>` +
       `<td></td>`;

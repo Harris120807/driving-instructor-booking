@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS bookings (
   duration_min INTEGER NOT NULL,
   price        REAL NOT NULL,                 -- £, captured at booking time
   lesson_type  TEXT NOT NULL DEFAULT 'manual', -- manual | automatic
-  motorway     INTEGER NOT NULL DEFAULT 0,    -- 1 = motorway lesson
+  motorway     INTEGER NOT NULL DEFAULT 0,    -- 1 = motorway lesson (fixed length)
+  mock         INTEGER NOT NULL DEFAULT 0,    -- 1 = mock test (fixed length)
   name         TEXT NOT NULL,
   email        TEXT NOT NULL,                 -- stored lowercased
   phone        TEXT NOT NULL,
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS bookings (
 --                       ALTER TABLE bookings ADD COLUMN house TEXT NOT NULL DEFAULT '';
 --                       ALTER TABLE bookings ADD COLUMN lesson_type TEXT NOT NULL DEFAULT 'manual';
 --                       ALTER TABLE bookings ADD COLUMN motorway INTEGER NOT NULL DEFAULT 0;
+--                       ALTER TABLE bookings ADD COLUMN mock INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings(date, status);
 CREATE INDEX IF NOT EXISTS idx_bookings_email ON bookings(email);
@@ -57,11 +59,13 @@ CREATE TABLE IF NOT EXISTS students (
   passed     INTEGER NOT NULL DEFAULT 0,     -- 1 = passed their test (hidden from default list)
   credit     REAL NOT NULL DEFAULT 0,        -- £ prepaid balance
   credit_min INTEGER NOT NULL DEFAULT 0,     -- prepaid lesson time (minutes, e.g. packages)
+  credit_mock  INTEGER NOT NULL DEFAULT 0,     -- prepaid MOCK TESTS (count, tracked separately)
   test_date  TEXT,                           -- pupil-entered driving test date (YYYY-MM-DD)
   updated_at INTEGER
 );
 -- Existing deployments: ALTER TABLE students ADD COLUMN test_date TEXT;
 --                       ALTER TABLE students ADD COLUMN credit_min INTEGER NOT NULL DEFAULT 0;
+--                       ALTER TABLE students ADD COLUMN credit_mock INTEGER NOT NULL DEFAULT 0;
 
 -- Standalone account charges (package fees etc.) — count toward owed until paid
 CREATE TABLE IF NOT EXISTS charges (

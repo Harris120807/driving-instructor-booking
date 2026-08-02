@@ -26,6 +26,8 @@ const DEFAULT_CONFIG = {
   hourly_rate_auto: 46,    // £ per hour, automatic
   min_duration: 60,        // shortest lesson pupils can book (minutes)
   max_duration: 240,       // longest lesson pupils can book (minutes)
+  motorway_minutes: 120,   // motorway lessons are a FIXED length
+  motorway_price: 0,       // £ for a motorway lesson; 0 = price at the normal rate
   notice_hours: 12,        // minimum notice to BOOK a slot
   cancel_notice_hours: 24, // cancelling closer than this to the lesson incurs the fee
   late_cancel_fee: 44,     // £ owed for a late cancellation
@@ -70,6 +72,16 @@ function lessonPrice(config, durationMin, type = 'manual') {
 }
 
 const LESSON_TYPES = ['manual', 'automatic'];
+
+// Motorway lessons are a fixed-length product: the pupil picks only a slot
+function motorwayMinutes(config) {
+  const m = parseInt(config.motorway_minutes, 10);
+  return DURATIONS.includes(m) ? m : 120;
+}
+function motorwayPrice(config, type) {
+  const p = parseFloat(config.motorway_price);
+  return Number.isFinite(p) && p > 0 ? p : lessonPrice(config, motorwayMinutes(config), type);
+}
 
 // Fixed packages pupils can request; prices are instructor-editable (config)
 function packageInfo(config) {
@@ -356,17 +368,18 @@ function upcomingCostOf(now, b) {
 
 async function studentMeta(env, email) {
   return (await env.DB.prepare('SELECT * FROM students WHERE email = ?').bind(email).first())
-    || { email, notes: '', passed: 0, credit: 0, credit_min: 0 };
+    || { email, notes: '', passed: 0, credit: 0, credit_min: 0, credit_mock: 0 };
 }
 
 async function putStudentMeta(env, m) {
   await env.DB.prepare(
-    `INSERT INTO students (email, notes, passed, credit, credit_min, test_date, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO students (email, notes, passed, credit, credit_min, credit_mock, test_date, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(email) DO UPDATE SET notes = excluded.notes, passed = excluded.passed,
-       credit = excluded.credit, credit_min = excluded.credit_min,
+       credit = excluded.credit, credit_min = excluded.credit_min, credit_mock = excluded.credit_mock,
        test_date = excluded.test_date, updated_at = excluded.updated_at`
   ).bind(m.email, m.notes || '', m.passed ? 1 : 0, m.credit || 0, m.credit_min || 0,
-    m.test_date || null, Math.floor(Date.now() / 1000)).run();
+    m.credit_mock || 0, m.test_date || null, Math.floor(Date.now() / 1000)).run();
 }
 
 // Full account picture for one pupil (shared by /me/lessons and the console)
@@ -389,6 +402,7 @@ async function accountFor(env, email) {
     name: lastRow ? lastRow.name : '',
     postcode: lastRow ? lastRow.postcode : '', house: lastRow ? (lastRow.house || '') : '',
     lessons, gross_owed: gross, credit: meta.credit || 0, credit_min: meta.credit_min || 0,
+    credit_mock: meta.credit_mock || 0,
     charges: charges.map(ch => ({ id: ch.id, label: ch.label, amount: ch.amount, paid: !!ch.paid })),
     owed: Math.max(0, gross - (meta.credit || 0)),
     upcoming_cost: upcoming, passed: !!meta.passed,
@@ -415,7 +429,7 @@ function newRef() {
 const publicLesson = b => ({
   ref: b.ref, series: b.series, date: b.date, time: b.time,
   duration_min: b.duration_min, price: b.price, status: b.status,
-  lesson_type: b.lesson_type || 'manual', motorway: !!b.motorway,
+  lesson_type: b.lesson_type || 'manual', motorway: !!b.motorway, mock: !!b.mock,
   cancelled_by: b.cancelled_by, fee: b.fee, paid: !!b.paid,
 });
 
@@ -444,6 +458,10 @@ export default {
           cancel_notice_hours: c.cancel_notice_hours, late_cancel_fee: c.late_cancel_fee,
           horizon_days: c.horizon_days, durations: DURATIONS, max_repeat_weeks: MAX_REPEAT_WEEKS,
           packages: packageInfo(c),
+          motorway: {
+            minutes: motorwayMinutes(c),
+            price: { manual: motorwayPrice(c, 'manual'), automatic: motorwayPrice(c, 'automatic') },
+          },
         }, 200, { 'Cache-Control': 'public, max-age=300' });
       }
 
@@ -493,8 +511,11 @@ export default {
         const dur = parseInt(url.searchParams.get('duration') || '60', 10);
         if (!RE_DATE.test(from || '') || !RE_DATE.test(to || '') || !DURATIONS.includes(dur))
           return json({ error: 'bad params' }, 400);
-        const [loS, hiS] = durationBounds(await getSetting(env, 'config', DEFAULT_CONFIG));
-        if (dur < loS || dur > hiS) return json({ error: 'bad params' }, 400);
+        const cfgS = await getSetting(env, 'config', DEFAULT_CONFIG);
+        const [loS, hiS] = durationBounds(cfgS);
+        // the fixed motorway length is always queryable, even outside the range
+        if ((dur < loS || dur > hiS) && dur !== motorwayMinutes(cfgS))
+          return json({ error: 'bad params' }, 400);
         return json({ slots: await openSlots(env, from, to, dur) }, 200,
           { 'Cache-Control': 'public, max-age=60' });
       }
@@ -506,14 +527,20 @@ export default {
 
         const b = await readBody(req);
         if (!b) return json({ error: 'bad request' }, 400);
-        const { date, time, duration } = b;
+        const { date, time } = b;
         const notes = String(b.notes || '').slice(0, 500);
         const repeatWeeks = Math.min(MAX_REPEAT_WEEKS, Math.max(1, parseInt(b.repeat_weeks, 10) || 1));
 
         if (!RE_DATE.test(date || '') || !RE_TIME.test(time || '')) return json({ error: 'Invalid slot.' }, 400);
-        if (!DURATIONS.includes(duration)) return json({ error: 'Invalid duration.' }, 400);
         const lessonType = LESSON_TYPES.includes(b.lesson_type) ? b.lesson_type : 'manual';
-        const motorway = b.motorway ? 1 : 0;
+        // Motorway lessons and mock tests are fixed-length products — their
+        // duration and price come from config, never from the client
+        const cfgB = await getSetting(env, 'config', DEFAULT_CONFIG);
+        const mock = b.mock ? 1 : 0;
+        const motorway = (!mock && b.motorway) ? 1 : 0;
+        const duration = mock ? packageInfo(cfgB).mock.minutes
+          : motorway ? motorwayMinutes(cfgB) : parseInt(b.duration, 10);
+        if (!DURATIONS.includes(duration)) return json({ error: 'Invalid duration.' }, 400);
         if (!RE_UK_POSTCODE.test(b.postcode || '')) return json({ error: 'Please give a valid UK pickup postcode.' }, 400);
         const house = String(b.house || '').trim().slice(0, 30);
         if (!house) return json({ error: 'Please give your house number or name.' }, 400);
@@ -538,16 +565,19 @@ export default {
         if (bkName.length < 2 || bkName.length > 100) return json({ error: 'Please give your name.' }, 400);
         if (!RE_PHONE.test(bkPhone)) return json({ error: 'Please give a valid phone number.' }, 400);
 
-        const config = await getSetting(env, 'config', DEFAULT_CONFIG);
+        const config = cfgB;
         const [loB, hiB] = durationBounds(config);
-        if (duration < loB || duration > hiB) return json({ error: 'Invalid duration.' }, 400);
+        if (!motorway && !mock && (duration < loB || duration > hiB))
+          return json({ error: 'Invalid duration.' }, 400);
 
         // First lesson must be a genuinely open slot (notice + horizon enforced)
         const open = await openSlots(env, date, date, duration);
         if (!(open[date] || []).includes(time))
           return json({ error: 'That slot is no longer available — please pick another.' }, 409);
 
-        const price = lessonPrice(config, duration, lessonType);
+        const price = mock ? packageInfo(config).mock.price
+          : motorway ? motorwayPrice(config, lessonType)
+          : lessonPrice(config, duration, lessonType);
         const name = bkName, email = bkEmail.toLowerCase();
         const phone = bkPhone, postcode = String(b.postcode).trim().toUpperCase();
         const series = repeatWeeks > 1 ? newRef() : null;
@@ -563,14 +593,14 @@ export default {
           }
           const ref = newRef();
           await env.DB.prepare(
-            `INSERT INTO bookings (ref, series, date, time, duration_min, price, lesson_type, motorway, name, email, phone, postcode, house, notes, status, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
-          ).bind(ref, series, d, time, duration, price, lessonType, motorway, name, email, phone, postcode, house, notes, nowSec).run();
+            `INSERT INTO bookings (ref, series, date, time, duration_min, price, lesson_type, motorway, mock, name, email, phone, postcode, house, notes, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
+          ).bind(ref, series, d, time, duration, price, lessonType, motorway, mock, name, email, phone, postcode, house, notes, nowSec).run();
           booked.push({ date: d, ref });
         }
 
         notify(env, ctx, repeatWeeks > 1 ? `New weekly lesson request (${booked.length}×)` : 'New lesson request',
-          `${date} ${time} (${duration} min, ${lessonType}${motorway ? ', motorway' : ''}${repeatWeeks > 1 ? `, weekly ×${booked.length}` : ''})\n` +
+          `${date} ${time} (${duration} min, ${lessonType}${motorway ? ', motorway' : ''}${mock ? ', MOCK TEST' : ''}${repeatWeeks > 1 ? `, weekly ×${booked.length}` : ''})\n` +
           `${name} — ${house} ${postcode}\nRef ${booked[0].ref}${skipped.length ? `\nSkipped (unavailable): ${skipped.join(', ')}` : ''}`);
 
         return json({
@@ -641,6 +671,7 @@ export default {
           return json({
             email, name: acc.name, postcode: acc.postcode, house: acc.house,
             lessons: acc.lessons, charges: acc.charges, credit_min: acc.credit_min,
+            credit_mock: acc.credit_mock,
             owed: acc.owed, gross_owed: acc.gross_owed, credit: acc.credit,
             upcoming_cost: acc.upcoming_cost, passed: acc.passed, test_date: acc.test_date,
             cancel_notice_hours: config.cancel_notice_hours, late_cancel_fee: config.late_cancel_fee,
@@ -683,11 +714,11 @@ export default {
           ).bind(fee, row.id).run();
           const nref = newRef();
           await env.DB.prepare(
-            `INSERT INTO bookings (ref, series, date, time, duration_min, price, lesson_type, motorway, name, email, phone, postcode, house, notes, status, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
+            `INSERT INTO bookings (ref, series, date, time, duration_min, price, lesson_type, motorway, mock, name, email, phone, postcode, house, notes, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
           ).bind(nref, null, nd, nt, row.duration_min,
             lessonPrice(config, row.duration_min, row.lesson_type || 'manual'),
-            row.lesson_type || 'manual', row.motorway || 0,
+            row.lesson_type || 'manual', row.motorway || 0, row.mock || 0,
             row.name, row.email, row.phone, row.postcode, row.house || '', row.notes || '',
             Math.floor(Date.now() / 1000)).run();
           notify(env, ctx, late ? 'Lesson moved by pupil (late)' : 'Lesson moved by pupil',
@@ -781,7 +812,8 @@ export default {
           const notes = String(b.notes || '').slice(0, 500);
           const status = b.status === 'pending' ? 'pending' : 'confirmed';
           const abType = LESSON_TYPES.includes(b.lesson_type) ? b.lesson_type : 'manual';
-          const abMotorway = b.motorway ? 1 : 0;
+          const abMock = b.mock ? 1 : 0;
+          const abMotorway = (!abMock && b.motorway) ? 1 : 0;
           const repeatWeeks = Math.min(MAX_REPEAT_WEEKS, Math.max(1, parseInt(b.repeat_weeks, 10) || 1));
           const config = await getSetting(env, 'config', DEFAULT_CONFIG);
           const priceIn = parseFloat(b.price);
@@ -804,9 +836,9 @@ export default {
             }
             const ref = newRef();
             await env.DB.prepare(
-              `INSERT INTO bookings (ref, series, date, time, duration_min, price, lesson_type, motorway, name, email, phone, postcode, house, notes, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            ).bind(ref, series, d, time, duration, price, abType, abMotorway, name, email, phone, postcode, house, notes, status, nowSec).run();
+              `INSERT INTO bookings (ref, series, date, time, duration_min, price, lesson_type, motorway, mock, name, email, phone, postcode, house, notes, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ).bind(ref, series, d, time, duration, price, abType, abMotorway, abMock, name, email, phone, postcode, house, notes, status, nowSec).run();
             booked.push({ date: d, ref });
           }
           return json({ ok: true, booked, skipped, price_each: price, email });
@@ -907,6 +939,7 @@ export default {
             s.gross_owed += chargesBy.get(s.email) || 0;
             s.credit = m.credit || 0;
             s.credit_min = m.credit_min || 0;
+            s.credit_mock = m.credit_mock || 0;
             s.passed = !!m.passed;
             s.test_date = m.test_date || null;
             s.has_notes = !!(m.notes && m.notes.trim());
@@ -934,7 +967,8 @@ export default {
             lessons: rows.map(r => ({ ...r, past: lessonPast(now, r), owed_now: owedOf(now, r) })),
             charges: chRows,
             meta: { notes: meta.notes || '', passed: !!meta.passed, credit: meta.credit || 0,
-              credit_min: meta.credit_min || 0, test_date: meta.test_date || null },
+              credit_min: meta.credit_min || 0, credit_mock: meta.credit_mock || 0,
+              test_date: meta.test_date || null },
             gross_owed: gross, owed: Math.max(0, gross - (meta.credit || 0)),
             has_account: hasAccount,
           });
@@ -962,7 +996,8 @@ export default {
             const pkg = packageInfo(config)[row.package];
             if (!pkg) return json({ error: 'unknown package' }, 400);
             const m = await studentMeta(env, row.email);
-            m.credit_min = (m.credit_min || 0) + pkg.minutes;
+            if (row.package === 'mock') m.credit_mock = (m.credit_mock || 0) + 1;
+            else m.credit_min = (m.credit_min || 0) + pkg.minutes;
             await putStudentMeta(env, { ...m, email: row.email });
             await env.DB.prepare(
               'INSERT INTO charges (email, label, amount, paid, created_at) VALUES (?, ?, ?, 0, ?)'
@@ -980,21 +1015,28 @@ export default {
           return json({ ok: true });
         }
 
-        // Settle one unpaid lesson from the pupil's prepaid lesson-time hours
+        // Settle one unpaid lesson from prepaid credit — lesson-time hours, or
+        // (for motorway lessons) the pupil's separate motorway-lesson credit
         if (path === '/admin/cover-from-hours' && req.method === 'POST') {
           const b = await readBody(req);
           if (!b || !Number.isInteger(b.id)) return json({ error: 'bad request' }, 400);
           const row = await env.DB.prepare('SELECT * FROM bookings WHERE id = ?').bind(b.id).first();
           if (!row) return json({ error: 'not found' }, 404);
           if (row.paid) return json({ error: 'Already marked paid.' }, 409);
-          if (row.status === 'cancelled') return json({ error: 'Hours cover lessons, not cancellation fees.' }, 400);
+          if (row.status === 'cancelled') return json({ error: 'Credit covers lessons, not cancellation fees.' }, 400);
           const m = await studentMeta(env, row.email);
-          if ((m.credit_min || 0) < row.duration_min)
-            return json({ error: `Not enough lesson-time credit (${m.credit_min || 0} min available, ${row.duration_min} needed).` }, 409);
-          m.credit_min -= row.duration_min;
+          if (b.unit === 'mock') {
+            if (!row.mock) return json({ error: 'That booking is not a mock test.' }, 400);
+            if ((m.credit_mock || 0) < 1) return json({ error: 'No prepaid mock tests left on their account.' }, 409);
+            m.credit_mock -= 1;
+          } else {
+            if ((m.credit_min || 0) < row.duration_min)
+              return json({ error: `Not enough lesson-time credit (${m.credit_min || 0} min available, ${row.duration_min} needed).` }, 409);
+            m.credit_min -= row.duration_min;
+          }
           await putStudentMeta(env, { ...m, email: row.email });
           await env.DB.prepare('UPDATE bookings SET paid = 1 WHERE id = ?').bind(b.id).run();
-          return json({ ok: true, credit_min: m.credit_min });
+          return json({ ok: true, credit_min: m.credit_min || 0, credit_mock: m.credit_mock || 0 });
         }
 
         if (path === '/admin/student-meta' && req.method === 'POST') {
@@ -1015,13 +1057,16 @@ export default {
           if (!RE_EMAIL.test(email) || !Number.isFinite(delta) || Math.abs(delta) > 6000)
             return json({ error: 'bad request' }, 400);
           const m = await studentMeta(env, email);
-          if (b.unit === 'minutes') {
+          if (b.unit === 'mock') {
+            m.credit_mock = Math.max(0, Math.round((m.credit_mock || 0) + delta));
+          } else if (b.unit === 'minutes') {
             m.credit_min = Math.max(0, Math.round((m.credit_min || 0) + delta));
           } else {
             m.credit = Math.max(0, Math.round(((m.credit || 0) + delta) * 100) / 100);
           }
           await putStudentMeta(env, { ...m, email });
-          return json({ ok: true, credit: m.credit || 0, credit_min: m.credit_min || 0 });
+          return json({ ok: true, credit: m.credit || 0, credit_min: m.credit_min || 0,
+            credit_mock: m.credit_mock || 0 });
         }
 
         // Settle one unpaid lesson (or cancellation fee) from the pupil's credit
@@ -1123,6 +1168,9 @@ export default {
             horizon_days: Math.round(num(c.horizon_days, 1, 90, DEFAULT_CONFIG.horizon_days)),
             pkg_beginner_price: num(c.pkg_beginner_price, 0, 2000, 190),
             pkg_mock_price: num(c.pkg_mock_price, 0, 2000, 95),
+            motorway_minutes: DURATIONS.includes(parseInt(c.motorway_minutes, 10))
+              ? parseInt(c.motorway_minutes, 10) : 120,
+            motorway_price: num(c.motorway_price, 0, 2000, 0),
           };
           await putSetting(env, 'config', clean);
           return json({ ok: true });
