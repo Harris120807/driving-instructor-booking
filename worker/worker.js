@@ -666,6 +666,59 @@ export default {
           });
         }
 
+        // Instructor-created booking (phone/text pupils). Deliberately skips
+        // template hours, notice and horizon — his diary, his rules. The only
+        // check is a clash with an existing non-cancelled lesson.
+        if (path === '/admin/add-booking' && req.method === 'POST') {
+          const b = await readBody(req);
+          if (!b) return json({ error: 'bad request' }, 400);
+          const { date, time } = b;
+          const duration = parseInt(b.duration, 10);
+          if (!RE_DATE.test(date || '') || !RE_TIME.test(time || '')) return json({ error: 'Invalid date or time.' }, 400);
+          if (!DURATIONS.includes(duration)) return json({ error: 'Invalid length.' }, 400);
+          const name = String(b.name || '').trim();
+          if (name.length < 2 || name.length > 100) return json({ error: "Give the pupil's name." }, 400);
+          const phone = String(b.phone || '').trim();
+          if (!RE_PHONE.test(phone)) return json({ error: 'Give a valid phone number.' }, 400);
+          let email = String(b.email || '').trim().toLowerCase();
+          if (email && (!RE_EMAIL.test(email) || email.length > 200)) return json({ error: 'That email looks invalid.' }, 400);
+          // No email known: synthesize a per-phone identity so the pupil's
+          // lessons still aggregate into one account row
+          if (!email) email = 'p' + phone.replace(/\D/g, '') + '@phone.local';
+          const postcode = String(b.postcode || '').trim().toUpperCase().slice(0, 10);
+          const house = String(b.house || '').trim().slice(0, 30);
+          const notes = String(b.notes || '').slice(0, 500);
+          const status = b.status === 'pending' ? 'pending' : 'confirmed';
+          const repeatWeeks = Math.min(MAX_REPEAT_WEEKS, Math.max(1, parseInt(b.repeat_weeks, 10) || 1));
+          const config = await getSetting(env, 'config', DEFAULT_CONFIG);
+          const priceIn = parseFloat(b.price);
+          const price = Number.isFinite(priceIn) && priceIn >= 0 && priceIn <= 1000
+            ? priceIn : lessonPrice(config, duration);
+          const series = repeatWeeks > 1 ? newRef() : null;
+          const nowSec = Math.floor(Date.now() / 1000);
+
+          const booked = [], skipped = [];
+          for (let w = 0; w < repeatWeeks; w++) {
+            const d = addDays(date, w * 7);
+            const clash = (await env.DB.prepare(
+              "SELECT time, duration_min FROM bookings WHERE date = ? AND status != 'cancelled'"
+            ).bind(d).all()).results.some(r =>
+              toMin(time) < toMin(r.time) + r.duration_min && toMin(time) + duration > toMin(r.time));
+            if (clash) {
+              if (w === 0) return json({ error: 'That time overlaps an existing lesson.' }, 409);
+              skipped.push(d);
+              continue;
+            }
+            const ref = newRef();
+            await env.DB.prepare(
+              `INSERT INTO bookings (ref, series, date, time, duration_min, price, name, email, phone, postcode, house, notes, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ).bind(ref, series, d, time, duration, price, name, email, phone, postcode, house, notes, status, nowSec).run();
+            booked.push({ date: d, ref });
+          }
+          return json({ ok: true, booked, skipped, price_each: price, email });
+        }
+
         if (path === '/admin/bookings' && req.method === 'GET') {
           const status = url.searchParams.get('status');
           const q = status

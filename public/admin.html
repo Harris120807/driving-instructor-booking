@@ -188,12 +188,49 @@
           <div class="kpi owe"><div class="v" id="kOutstanding">£0</div><div class="l">Outstanding (all pupils)</div></div>
         </div>
       </div>
+      <div class="card" id="addCard" style="display:none">
+        <h2>Add a booking</h2>
+        <p class="muted">For pupils who ring or text you. Books at <b>any</b> time — outside your usual hours, inside the notice window, even in the past to record an old lesson. Only a clash with an existing lesson is blocked. If you don't know their email, leave it blank — their lessons still group under one pupil by phone number.</p>
+        <div class="grid">
+          <div>
+            <div class="field"><label for="abName">Pupil name (existing pupils autocomplete)</label>
+              <input id="abName" list="pupilList" maxlength="100" style="width:100%"></div>
+            <datalist id="pupilList"></datalist>
+            <div class="field"><label for="abPhone">Phone</label><input id="abPhone" style="width:100%"></div>
+            <div class="field"><label for="abEmail">Email (optional)</label><input id="abEmail" type="email" style="width:100%"></div>
+            <div class="ovrow">
+              <div class="field" style="flex:1"><label for="abHouse">House no.</label><input id="abHouse" maxlength="30" style="width:100%"></div>
+              <div class="field" style="flex:2"><label for="abPostcode">Postcode</label><input id="abPostcode" maxlength="10" style="width:100%"></div>
+            </div>
+          </div>
+          <div>
+            <div class="ovrow">
+              <div class="field"><label for="abDate">Date</label><input type="date" id="abDate"></div>
+              <div class="field"><label for="abTime">Start</label><input type="time" id="abTime"></div>
+            </div>
+            <div class="ovrow">
+              <div class="field"><label for="abDur">Length</label>
+                <select id="abDur"><option value="60">1 hour</option><option value="90">1½ hours</option><option value="120">2 hours</option><option value="150">2½ hours</option><option value="180">3 hours</option><option value="210">3½ hours</option><option value="240">4 hours</option></select></div>
+              <div class="field"><label for="abPrice">Price £</label><input type="number" id="abPrice" step="0.5" min="0" style="width:90px"></div>
+              <div class="field"><label for="abRepeat">Repeat</label>
+                <select id="abRepeat"><option value="1">One-off</option><option value="4">Weekly ×4</option><option value="8">Weekly ×8</option><option value="12">Weekly ×12</option></select></div>
+            </div>
+            <div class="field"><label><input type="checkbox" id="abConfirmed" checked> Already agreed with the pupil (mark confirmed)</label></div>
+            <div class="field"><label for="abNotes">Notes</label><input id="abNotes" maxlength="500" style="width:100%"></div>
+            <button class="btn" id="abGo">Add booking</button>
+          </div>
+        </div>
+        <div class="msg" id="abMsg"></div>
+      </div>
       <div class="card">
-        <div class="filters" id="statusFilters">
-          <button class="chip sel" data-status="">Upcoming</button>
-          <button class="chip" data-status="pending">Pending</button>
-          <button class="chip" data-status="confirmed">Confirmed</button>
-          <button class="chip" data-status="cancelled">Cancelled</button>
+        <div class="topbar" style="margin-bottom:6px">
+          <div class="filters" id="statusFilters" style="margin-bottom:4px">
+            <button class="chip sel" data-status="">Upcoming</button>
+            <button class="chip" data-status="pending">Pending</button>
+            <button class="chip" data-status="confirmed">Confirmed</button>
+            <button class="chip" data-status="cancelled">Cancelled</button>
+          </div>
+          <button class="btn sm" id="addToggle">＋ Add booking</button>
         </div>
         <div style="overflow-x:auto">
           <table>
@@ -641,6 +678,59 @@ function actBtn(label, action, b, danger) {
   return btn;
 }
 
+// --- add booking (instructor-created, any time) ---
+let RATE = 44;
+let STUDENTS = [];
+
+$('addToggle').onclick = () => {
+  const c = $('addCard');
+  const show = c.style.display === 'none';
+  c.style.display = show ? 'block' : 'none';
+  if (show) {
+    if (!$('abPrice').value) $('abPrice').value = RATE;
+    $('abName').focus();
+  }
+};
+
+$('abDur').addEventListener('change', () => {
+  $('abPrice').value = Math.round(RATE * parseInt($('abDur').value, 10) / 60 * 100) / 100;
+});
+
+// Autofill contact fields when an existing pupil is picked from the datalist
+$('abName').addEventListener('change', () => {
+  const s = STUDENTS.find(x => x.name === $('abName').value.trim());
+  if (!s) return;
+  $('abPhone').value = s.phone || '';
+  $('abEmail').value = s.email.endsWith('@phone.local') ? '' : s.email;
+  $('abHouse').value = s.house || '';
+  $('abPostcode').value = s.postcode || '';
+});
+
+$('abGo').onclick = async () => {
+  const body = {
+    date: $('abDate').value, time: $('abTime').value,
+    duration: parseInt($('abDur').value, 10),
+    price: parseFloat($('abPrice').value),
+    repeat_weeks: parseInt($('abRepeat').value, 10),
+    status: $('abConfirmed').checked ? 'confirmed' : 'pending',
+    name: $('abName').value.trim(), phone: $('abPhone').value.trim(),
+    email: $('abEmail').value.trim(), house: $('abHouse').value.trim(),
+    postcode: $('abPostcode').value.trim(), notes: $('abNotes').value.trim(),
+  };
+  if (!body.date || !body.time) { err($('abMsg'), 'Pick a date and start time.'); return; }
+  try {
+    let j = { booked: [{ date: body.date }], skipped: [] };
+    if (!DEMO) j = await api('/admin/add-booking', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    ok($('abMsg'), `Added ${j.booked.length} lesson(s)` +
+      (j.skipped.length ? ` — skipped (clash): ${j.skipped.join(', ')}` : '') + '.');
+    for (const id of ['abName', 'abPhone', 'abEmail', 'abHouse', 'abPostcode', 'abNotes', 'abTime']) $(id).value = '';
+    loadBookings(); loadStudents(); if (calMode) loadCalendar();
+  } catch (e) { err($('abMsg'), e.message); }
+};
+
 // --- students ---
 let passedFilter = '';
 let curStudent = null;
@@ -658,6 +748,10 @@ async function loadStudents() {
   else {
     try { students = (await api('/admin/students' + (passedFilter ? '?passed=1' : ''))).students; }
     catch (e) { $('studentsBody').innerHTML = `<tr><td colspan="8" class="muted">${esc(e.message)}</td></tr>`; return; }
+  }
+  if (!passedFilter) {
+    STUDENTS = students;
+    $('pupilList').innerHTML = students.map(s => `<option value="${esc(s.name)}">`).join('');
   }
   const tb = $('studentsBody'); tb.innerHTML = '';
   if (!students.length) {
@@ -1112,6 +1206,7 @@ async function loadSettings() {
   $('sNotice').value = c.notice_hours; $('sCancelNotice').value = c.cancel_notice_hours;
   $('sFee').value = c.late_cancel_fee; $('sHorizon').value = c.horizon_days;
   $('consTitle').textContent = c.name + ' — console';
+  RATE = parseFloat($('sRate').value) || 44;
 }
 
 $('saveSettings').onclick = async () => {
