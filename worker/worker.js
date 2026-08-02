@@ -368,18 +368,18 @@ function upcomingCostOf(now, b) {
 
 async function studentMeta(env, email) {
   return (await env.DB.prepare('SELECT * FROM students WHERE email = ?').bind(email).first())
-    || { email, notes: '', passed: 0, credit: 0, credit_min: 0, credit_mock: 0 };
+    || { email, notes: '', passed: 0, credit: 0, credit_min: 0, credit_mock: 0, archived: 0 };
 }
 
 async function putStudentMeta(env, m) {
   await env.DB.prepare(
-    `INSERT INTO students (email, notes, passed, credit, credit_min, credit_mock, test_date, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO students (email, notes, passed, credit, credit_min, credit_mock, archived, test_date, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(email) DO UPDATE SET notes = excluded.notes, passed = excluded.passed,
        credit = excluded.credit, credit_min = excluded.credit_min, credit_mock = excluded.credit_mock,
-       test_date = excluded.test_date, updated_at = excluded.updated_at`
+       archived = excluded.archived, test_date = excluded.test_date, updated_at = excluded.updated_at`
   ).bind(m.email, m.notes || '', m.passed ? 1 : 0, m.credit || 0, m.credit_min || 0,
-    m.credit_mock || 0, m.test_date || null, Math.floor(Date.now() / 1000)).run();
+    m.credit_mock || 0, m.archived ? 1 : 0, m.test_date || null, Math.floor(Date.now() / 1000)).run();
 }
 
 // Full account picture for one pupil (shared by /me/lessons and the console)
@@ -780,8 +780,10 @@ export default {
             gross.set(r.email, (gross.get(r.email) || 0) + owedOf(now, r));
           }
           const creditBy = new Map(metas.map(m => [m.email, m.credit || 0]));
+          const archived = new Set(metas.filter(m => m.archived).map(m => m.email));
           let outstanding = 0;
-          for (const [em, g] of gross) outstanding += Math.max(0, g - (creditBy.get(em) || 0));
+          for (const [em, g] of gross)
+            if (!archived.has(em)) outstanding += Math.max(0, g - (creditBy.get(em) || 0));
           return json({
             week_booked: weekBooked, month_booked: monthBooked,
             month_collected: monthCollected, outstanding, pending,
@@ -911,7 +913,8 @@ export default {
         }
 
         if (path === '/admin/students' && req.method === 'GET') {
-          const wantPassed = url.searchParams.get('passed') === '1';
+          const view = url.searchParams.get('view') ||
+            (url.searchParams.get('passed') === '1' ? 'passed' : 'active');
           const rows = (await env.DB.prepare('SELECT * FROM bookings ORDER BY created_at').all()).results;
           const metas = new Map((await env.DB.prepare('SELECT * FROM students').all())
             .results.map(m => [m.email, m]));
@@ -941,11 +944,14 @@ export default {
             s.credit_min = m.credit_min || 0;
             s.credit_mock = m.credit_mock || 0;
             s.passed = !!m.passed;
+            s.archived = !!m.archived;
             s.test_date = m.test_date || null;
             s.has_notes = !!(m.notes && m.notes.trim());
             s.owed = Math.max(0, s.gross_owed - s.credit);
             return s;
-          }).filter(s => s.passed === wantPassed)
+          }).filter(s => view === 'archived' ? s.archived
+            : view === 'passed' ? (s.passed && !s.archived)
+            : (!s.passed && !s.archived))
             .sort((a, b2) => b2.owed - a.owed || a.name.localeCompare(b2.name));
           return json({ students });
         }
@@ -967,7 +973,7 @@ export default {
             lessons: rows.map(r => ({ ...r, past: lessonPast(now, r), owed_now: owedOf(now, r) })),
             charges: chRows,
             meta: { notes: meta.notes || '', passed: !!meta.passed, credit: meta.credit || 0,
-              credit_min: meta.credit_min || 0, credit_mock: meta.credit_mock || 0,
+              credit_min: meta.credit_min || 0, credit_mock: meta.credit_mock || 0, archived: !!meta.archived,
               test_date: meta.test_date || null },
             gross_owed: gross, owed: Math.max(0, gross - (meta.credit || 0)),
             has_account: hasAccount,
@@ -1039,27 +1045,21 @@ export default {
           return json({ ok: true, credit_min: m.credit_min || 0, credit_mock: m.credit_mock || 0 });
         }
 
-        // Permanently remove a pupil and everything tied to them. Guarded to
-        // pupils marked as passed so an active learner can't be wiped by a
-        // mis-tap; deliberately irreversible (full erase, GDPR-friendly).
-        if (path === '/admin/student-delete' && req.method === 'POST') {
+        // File a finished pupil away: they leave the working lists but every
+        // lesson and payment record is kept, so past months' takings still add
+        // up. Reversible — nothing is deleted.
+        if (path === '/admin/student-archive' && req.method === 'POST') {
           const b = await readBody(req);
           const email = String(b?.email || '').trim().toLowerCase();
-          if (!RE_EMAIL.test(email)) return json({ error: 'bad request' }, 400);
-          const meta = await env.DB.prepare('SELECT * FROM students WHERE email = ?').bind(email).first();
-          if (!meta || !meta.passed)
-            return json({ error: 'Only pupils marked as passed can be removed.' }, 409);
-          const { c: lessons } = await env.DB.prepare(
-            'SELECT COUNT(*) AS c FROM bookings WHERE email = ?').bind(email).first();
-          for (const sql of [
-            'DELETE FROM bookings WHERE email = ?',
-            'DELETE FROM charges WHERE email = ?',
-            'DELETE FROM package_requests WHERE email = ?',
-            'DELETE FROM sessions WHERE email = ?',
-            'DELETE FROM users WHERE email = ?',
-            'DELETE FROM students WHERE email = ?',
-          ]) await env.DB.prepare(sql).bind(email).run();
-          return json({ ok: true, deleted_lessons: lessons });
+          if (!RE_EMAIL.test(email) || typeof b.archived !== 'boolean')
+            return json({ error: 'bad request' }, 400);
+          const meta = await studentMeta(env, email);
+          if (b.archived && !meta.passed)
+            return json({ error: 'Mark the pupil as passed before archiving them.' }, 409);
+          meta.archived = b.archived ? 1 : 0;
+          await putStudentMeta(env, { ...meta, email });
+          if (b.archived) await env.DB.prepare('DELETE FROM sessions WHERE email = ?').bind(email).run();
+          return json({ ok: true, archived: !!meta.archived });
         }
 
         if (path === '/admin/student-meta' && req.method === 'POST') {

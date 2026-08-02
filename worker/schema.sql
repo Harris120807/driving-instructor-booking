@@ -60,12 +60,14 @@ CREATE TABLE IF NOT EXISTS students (
   credit     REAL NOT NULL DEFAULT 0,        -- £ prepaid balance
   credit_min INTEGER NOT NULL DEFAULT 0,     -- prepaid lesson time (minutes, e.g. packages)
   credit_mock  INTEGER NOT NULL DEFAULT 0,     -- prepaid MOCK TESTS (count, tracked separately)
+  archived   INTEGER NOT NULL DEFAULT 0,     -- 1 = filed away; keeps history, out of working lists
   test_date  TEXT,                           -- pupil-entered driving test date (YYYY-MM-DD)
   updated_at INTEGER
 );
 -- Existing deployments: ALTER TABLE students ADD COLUMN test_date TEXT;
 --                       ALTER TABLE students ADD COLUMN credit_min INTEGER NOT NULL DEFAULT 0;
 --                       ALTER TABLE students ADD COLUMN credit_mock INTEGER NOT NULL DEFAULT 0;
+--                       ALTER TABLE students ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
 
 -- Standalone account charges (package fees etc.) — count toward owed until paid
 CREATE TABLE IF NOT EXISTS charges (

@@ -324,8 +324,9 @@
         <h2>Students &amp; accounts</h2>
         <p class="muted">One row per pupil. “Owed” = past lessons not yet paid + unpaid late-cancellation fees, minus any credit. Click a row for their full account. Pupils marked as passed move to the Passed list.</p>
         <div class="filters" id="passedFilters">
-          <button class="chip sel" data-passed="">Active</button>
-          <button class="chip" data-passed="1">Passed 🎉</button>
+          <button class="chip sel" data-view="active">Active</button>
+          <button class="chip" data-view="passed">Passed 🎉</button>
+          <button class="chip" data-view="archived">Archived</button>
         </div>
         <div style="overflow-x:auto">
           <table>
@@ -922,11 +923,11 @@ $('abGo').onclick = async () => {
 };
 
 // --- students ---
-let passedFilter = '';
+let studentView = 'active';
 let curStudent = null;
 $('passedFilters').addEventListener('click', e => {
   const c = e.target.closest('.chip'); if (!c) return;
-  passedFilter = c.dataset.passed;
+  studentView = c.dataset.view;
   document.querySelectorAll('#passedFilters .chip').forEach(x => x.classList.toggle('sel', x === c));
   $('studentDetail').style.display = 'none';
   loadStudents();
@@ -934,15 +935,19 @@ $('passedFilters').addEventListener('click', e => {
 
 async function loadStudents() {
   let students;
-  if (DEMO) students = demoStudents().filter(s => (passedFilter === '1') === !!s.passed);
+  if (DEMO) students = demoStudents().filter(s =>
+    studentView === 'archived' ? !!s.archived
+    : studentView === 'passed' ? (!!s.passed && !s.archived) : (!s.passed && !s.archived));
   else {
-    try { students = (await api('/admin/students' + (passedFilter ? '?passed=1' : ''))).students; }
-    catch (e) { $('studentsBody').innerHTML = `<tr><td colspan="8" class="muted">${esc(e.message)}</td></tr>`; return; }
+    try { students = (await api('/admin/students?view=' + studentView)).students; }
+    catch (e) { $('studentsBody').innerHTML = `<tr><td colspan="9" class="muted">${esc(e.message)}</td></tr>`; return; }
   }
-  if (!passedFilter) STUDENTS = students;
+  if (studentView === 'active') STUDENTS = students;
   const tb = $('studentsBody'); tb.innerHTML = '';
   if (!students.length) {
-    tb.innerHTML = `<tr><td colspan="8" class="muted">${passedFilter ? 'Nobody marked as passed yet.' : 'No pupils yet.'}</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="9" class="muted">${
+      studentView === 'archived' ? 'Nothing archived yet.'
+      : studentView === 'passed' ? 'Nobody marked as passed yet.' : 'No pupils yet.'}</td></tr>`;
     return;
   }
   for (const s of students) {
@@ -956,9 +961,9 @@ async function loadStudents() {
         `${s.credit_mock ? `<br><span class="muted">${s.credit_mock}× mock</span>` : ''}</td>` +
       `<td>${s.owed > 0 ? `<span class="owed">${fmtMoney(s.owed)}</span>` : fmtMoney(0)}</td>` +
       `<td>${testCell(s.test_date)}</td>`;
-    if (passedFilter) {
+    if (studentView !== 'active') {
       const cell = document.createElement('td');
-      cell.appendChild(removeStudentBtn(s));
+      cell.appendChild(archiveBtn(s, studentView === 'archived'));
       tr.appendChild(cell);
     }
     tr.onclick = () => loadStudent(s);
@@ -966,25 +971,30 @@ async function loadStudents() {
   }
 }
 
-// Passed pupils can be erased entirely — two-step confirm, warns on debt
-function removeStudentBtn(s) {
+// Archive files a finished pupil away without losing any history
+function archiveBtn(s, isArchived) {
   const btn = document.createElement('button');
-  btn.className = 'btn sm danger';
-  btn.textContent = 'Remove';
-  btn.title = 'Delete this pupil and all their history';
+  btn.className = 'btn sm' + (isArchived ? ' ghost' : ' danger');
+  btn.textContent = isArchived ? 'Restore' : 'Archive';
+  btn.title = isArchived
+    ? 'Put this pupil back in the Passed list'
+    : 'File this pupil away — their lessons and payments are kept';
   btn.onclick = async e => {
     e.stopPropagation();
-    const owes = s.owed > 0 ? `\n\nWARNING: they still owe ${fmtMoney(s.owed)} — that record will be lost too.` : '';
-    if (!confirm(`Permanently remove ${s.name}?\n\nThis deletes their lessons, payment history and online account. It cannot be undone.${owes}`)) return;
-    if (!confirm(`Last check — delete ${s.name} for good?`)) return;
+    if (!isArchived) {
+      const owes = s.owed > 0
+        ? `\n\nNote: they still owe ${fmtMoney(s.owed)}. Archiving keeps the record but drops it from your Outstanding total.`
+        : '';
+      if (!confirm(`Archive ${s.name}?\n\nThey move to the Archived list and out of your day-to-day view. All lessons and payments are kept for your records, and you can restore them any time.${owes}`)) return;
+    }
     try {
-      const j = await api('/admin/student-delete', {
+      await api('/admin/student-archive', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: s.email }),
+        body: JSON.stringify({ email: s.email, archived: !isArchived }),
       });
-      ok($('sdMsg'), `${s.name} removed (${j.deleted_lessons} lesson record(s) deleted).`);
+      ok($('sdMsg'), isArchived ? `${s.name} restored to the Passed list.` : `${s.name} archived — history kept.`);
       $('studentDetail').style.display = 'none';
-      loadStudents(); loadBookings(); loadCalendar();
+      loadStudents(); loadSummary();
     } catch (e2) { err($('sdMsg'), e2.message); }
   };
   return btn;
@@ -1023,7 +1033,7 @@ async function loadStudent(s) {
   const oldRm = document.getElementById('sdRemove');
   if (oldRm) oldRm.remove();
   if (meta.passed) {
-    const rm = removeStudentBtn({ ...s, owed: s.owed ?? 0 });
+    const rm = archiveBtn({ ...s, owed: s.owed ?? 0 }, !!meta.archived);
     rm.id = 'sdRemove';
     rm.style.marginLeft = '8px';
     $('sdPassed').after(rm);
