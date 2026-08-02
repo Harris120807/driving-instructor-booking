@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#1a7a4a">
+<link rel="icon" type="image/png" href="/icon.png">
+<link rel="apple-touch-icon" href="/icon.png">
 <title>Book a Driving Lesson</title>
 <meta name="description" content="Book manual driving lessons online — see live availability and reserve your slot.">
 <style>
@@ -37,6 +39,11 @@
     padding: 28px 24px; margin-bottom: 20px;
   }
   header.hero h1 { margin: 0 0 6px; font-size: 1.7rem; }
+  .brand-plate {
+    background: #fff; border-radius: 12px; padding: 8px 12px;
+    display: inline-block; margin-bottom: 12px; max-width: 100%;
+  }
+  .brand-plate img { display: block; max-width: 100%; height: auto; max-height: 96px; }
   header.hero p { margin: 0; opacity: .92; }
   .badges { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
   .badge {
@@ -151,6 +158,8 @@
   <div class="demo-note" id="demoNote">Preview mode — no backend connected; slots and lessons shown are samples and nothing is saved.</div>
 
   <header class="hero">
+    <div class="brand-plate"><img src="/logo.png" alt="Ride Wae Pride"
+      onerror="this.parentElement.style.display='none'"></div>
     <h1 id="hName">Driving Lessons</h1>
     <p id="hArea">Loading…</p>
     <div class="badges">
@@ -332,6 +341,7 @@ async function loadConfig() {
     $('demoNote').style.display = 'block';
   }
   $('hName').textContent = CONFIG.name;
+  document.title = CONFIG.name + ' — book a driving lesson';
   $('hArea').textContent = CONFIG.area;
   $('fContact').textContent = [CONFIG.phone, CONFIG.email].filter(Boolean).join(' · ');
   $('horizonNote').textContent =
