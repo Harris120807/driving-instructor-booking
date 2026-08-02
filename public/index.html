@@ -7,7 +7,7 @@
 <link rel="icon" type="image/png" href="/icon.png">
 <link rel="apple-touch-icon" href="/icon.png">
 <title>Book a Driving Lesson</title>
-<meta name="description" content="Book manual driving lessons online — see live availability and reserve your slot.">
+<meta name="description" content="Ride with Pride Driving Academy — book driving lessons online, manual and automatic, with live availability.">
 <style>
   :root {
     color-scheme: light dark;
@@ -34,6 +34,33 @@
     font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
   .wrap { max-width: 880px; margin: 0 auto; padding: 16px 16px 80px; }
+  .topnav {
+    display: flex; align-items: center; gap: 6px; background: var(--card);
+    border: 1px solid var(--border); border-radius: 12px; padding: 8px 10px;
+    margin-bottom: 16px; position: sticky; top: 8px; z-index: 40;
+    box-shadow: 0 2px 10px rgba(20,32,26,.06);
+  }
+  .topnav img { height: 36px; width: auto; margin-right: 6px; }
+  .navtab {
+    border: 0; background: none; color: var(--text); font: inherit; font-weight: 600;
+    padding: 8px 14px; border-radius: 999px; cursor: pointer;
+  }
+  .navtab.sel { background: var(--accent-soft); color: var(--good); }
+  .accbtn {
+    margin-left: auto; background: var(--accent); color: #fff; border: 0; flex-shrink: 0;
+    border-radius: 999px; padding: 8px 16px; font: inherit; font-weight: 600; cursor: pointer;
+    white-space: nowrap; max-width: 34vw; overflow: hidden; text-overflow: ellipsis;
+  }
+  @media (max-width: 480px) {
+    .topnav img { display: none; } /* hero carries the logo; keep the nav roomy */
+    .navtab { padding: 8px 12px; }
+  }
+  .view { display: none; }
+  .view.sel { display: block; }
+  .pricetable td:not(:first-child), .pricetable th:not(:first-child) { text-align: right; }
+  .pkg { border: 1.5px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+  .pkg b { font-size: 1.02rem; }
+  .pkg .amt { float: right; font-weight: 700; color: var(--good); font-size: 1.05rem; }
   header.hero {
     background: var(--card); color: var(--text); border: 1px solid var(--border);
     border-radius: 14px; padding: 28px 24px; margin-bottom: 20px;
@@ -154,24 +181,67 @@
 <div class="wrap">
   <div class="demo-note" id="demoNote">Preview mode — no backend connected; slots and lessons shown are samples and nothing is saved.</div>
 
-  <header class="hero">
-    <div class="brand-plate"><img src="/logo.png" alt="Ride Wae Pride"
-      onerror="this.parentElement.style.display='none'"></div>
-    <h1 id="hName">Driving Lessons</h1>
-    <p id="hArea">Loading…</p>
-    <div class="badges">
-      <span class="badge">DVSA-approved instructor</span>
-      <span class="badge">Manual tuition</span>
-      <span class="badge">Door-to-door pickup</span>
-    </div>
-  </header>
+  <nav class="topnav">
+    <img src="/logo.png" alt="" onerror="this.style.display='none'">
+    <button class="navtab sel" data-view="home" type="button">Home</button>
+    <button class="navtab" data-view="book" type="button">Book</button>
+    <button class="accbtn" data-view="account" id="accBtn" type="button">Account</button>
+  </nav>
 
+  <div class="view sel" id="view-home">
+    <header class="hero">
+      <div class="brand-plate"><img src="/logo.png" alt="Ride Wae Pride"
+        onerror="this.parentElement.style.display='none'"></div>
+      <h1 id="hName">Driving Lessons</h1>
+      <p id="hArea">Loading…</p>
+      <div class="badges">
+        <span class="badge">DVSA-approved instructors</span>
+        <span class="badge">Manual &amp; automatic</span>
+        <span class="badge">VW Golf fleet</span>
+        <span class="badge">Door-to-door pickup</span>
+      </div>
+    </header>
+
+    <div class="card">
+      <h2>Learn with the best</h2>
+      <p>Enhance your learning experience with our premium fleet of <b>Volkswagen Golfs</b>, available in both manual and automatic transmission.</p>
+      <p>Our highly experienced Approved Driving Instructors (ADIs) bring up to <b>25 years of expertise</b> to every lesson.</p>
+      <button class="btn" data-view="book" type="button">Book a lesson</button>
+    </div>
+
+    <div class="card">
+      <h2>Lesson prices</h2>
+      <div style="overflow-x:auto">
+        <table class="pricetable">
+          <thead><tr><th>Lesson</th><th>Manual</th><th>Automatic</th></tr></thead>
+          <tbody>
+            <tr><td>1-hour lesson</td><td>£44</td><td>£46</td></tr>
+            <tr><td>2-hour lesson</td><td>£88</td><td>£92</td></tr>
+            <tr><td><b>10-hour block</b></td><td><b>£420</b></td><td><b>£440</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Packages</h2>
+      <div class="pkg"><span class="amt">£190</span><b>Beginner Package</b><br>
+        <span class="muted">5 hours — the perfect start for brand-new drivers.</span></div>
+      <div class="pkg"><span class="amt">£95</span><b>Mock Tests</b><br>
+        <span class="muted">2 hours, conducted independently by qualified ADIs.</span></div>
+      <div class="pkg"><span class="amt">ask</span><b>Motorway Package</b><br>
+        <span class="muted">Designed to build confidence and experience following your practical test, or to extend your driving time.</span></div>
+      <button class="btn" data-view="book" type="button">Book a lesson</button>
+    </div>
+  </div>
+
+  <div class="view" id="view-book">
   <div class="card">
     <h2>1 · Choose your lesson length</h2>
     <input type="range" id="lenSlider" min="60" max="240" step="30" value="60"
       style="width:100%; accent-color: var(--accent)" aria-label="Lesson length">
     <div style="display:flex; justify-content:space-between" class="muted"><span>1 hour</span><span>4 hours</span></div>
-    <div style="margin-top:8px; font-size:1.15rem"><b id="lenLabel">1 hour</b> · <b id="lenPrice">£44</b> <span class="muted">— manual lesson</span></div>
+    <div style="margin-top:8px; font-size:1.15rem"><b id="lenLabel">1 hour</b> · <b id="lenPrice">£44</b> <span class="muted">per lesson</span></div>
   </div>
 
   <div class="card">
@@ -206,7 +276,7 @@
         <option value="12">Weekly — same time for 12 weeks</option>
       </select>
       <label for="fNotes">Anything I should know? (optional)</label>
-      <textarea id="fNotes" rows="2" maxlength="500" placeholder="e.g. test booked for September, nervous beginner, prefer quiet roads first"></textarea>
+      <textarea id="fNotes" rows="2" maxlength="500" placeholder="e.g. prefer automatic, test booked for September, nervous beginner"></textarea>
       <p class="muted" id="policyLine"></p>
       <button class="btn" id="submitBtn" type="submit" disabled>Request booking</button>
       <div class="msg" id="msg"></div>
@@ -214,8 +284,11 @@
     </form>
   </div>
 
+  </div>
+
+  <div class="view" id="view-account">
   <div class="card" id="portalCard">
-    <h2>My lessons</h2>
+    <h2>My account</h2>
     <div id="authBox">
       <p class="muted">Track your lessons, what they cost and anything you owe — and cancel when you need to. First time? Create an account with the booking reference from any of your lessons (it proves the email is yours).</p>
       <div class="seg" id="authSeg">
@@ -271,6 +344,8 @@
     </div>
   </div>
 
+  </div>
+
   <footer>
     <span id="fContact"></span>
     <p><a href="/admin">Instructor sign-in</a></p>
@@ -285,8 +360,21 @@
 const $ = id => document.getElementById(id);
 let DEMO = false;
 
+// --- views (Home / Book / Account) ---
+const VIEWS = ['home', 'book', 'account'];
+function switchView(v) {
+  if (!VIEWS.includes(v)) v = 'home';
+  for (const x of VIEWS) $('view-' + x).classList.toggle('sel', x === v);
+  document.querySelectorAll('.navtab').forEach(b => b.classList.toggle('sel', b.dataset.view === v));
+  if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
+  window.scrollTo({ top: 0 });
+}
+document.querySelectorAll('[data-view]').forEach(b =>
+  b.addEventListener('click', () => switchView(b.dataset.view)));
+window.addEventListener('hashchange', () => switchView(location.hash.slice(1)));
+
 let CONFIG = {
-  name: 'Driving Lessons', area: 'Local manual lessons with door-to-door pickup',
+  name: 'Driving Lessons', area: 'Local lessons with door-to-door pickup',
   phone: '', email: '', hourly_rate: 44, prices: {},
   notice_hours: 12, cancel_notice_hours: 24, late_cancel_fee: 44,
   horizon_days: 21, durations: [60, 90, 120, 150, 180, 210, 240],
@@ -424,7 +512,7 @@ function renderTimes() {
     const d = new Date(state.date + 'T12:00:00');
     const weeks = parseInt($('fRepeat').value, 10);
     s.style.display = 'block';
-    s.textContent = `Selected: ${fmtLen(state.duration)} manual lesson — ` +
+    s.textContent = `Selected: ${fmtLen(state.duration)} lesson — ` +
       `${d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })} at ${state.time} · ` +
       `${fmtMoney(CONFIG.prices[state.duration])}` +
       (weeks > 1 ? ` per lesson, weekly for ${weeks} weeks` : '');
@@ -467,7 +555,7 @@ $('bookForm').addEventListener('submit', async e => {
       });
     }
     msg.className = 'msg ok';
-    let text = `Request sent! Your reference is ${j.ref} — keep it: you’ll use it to create your “My lessons” account below. The instructor will confirm shortly.`;
+    let text = `Request sent! Your reference is ${j.ref} — keep it: you’ll use it to create your account (top right). The instructor will confirm shortly.`;
     if (j.booked.length > 1) text = `Request sent for ${j.booked.length} weekly lessons! Your reference is ${j.ref}.` +
       (j.skipped.length ? ` Unavailable weeks skipped: ${j.skipped.join(', ')}.` : '') +
       ' The instructor will confirm shortly.';
@@ -529,6 +617,7 @@ $('meSignOut').onclick = async () => {
   state.portal = null;
   $('portal').style.display = 'none';
   $('authBox').style.display = 'block';
+  $('accBtn').textContent = 'Account';
   bookingMode();
 };
 
@@ -574,6 +663,7 @@ function renderPortal() {
   const j = state.portal;
   $('authBox').style.display = 'none';
   $('portal').style.display = 'block';
+  $('accBtn').textContent = j.name ? j.name.split(' ')[0] : 'My account';
   $('meWho').textContent = j.name ? `${j.name} (${j.email})` : j.email;
   const pn = $('passedNote');
   if (j.passed) { pn.style.display = 'block'; pn.textContent = '🎉 Congratulations on passing your test!'; }
@@ -735,6 +825,7 @@ async function cancelLesson(l) {
   } catch (err) { m.className = 'msg err'; m.textContent = err.message; }
 }
 
+switchView(location.hash.slice(1) || 'home');
 loadConfig().then(() => { loadSlots(); loadMe(); });
 </script>
 </body>
