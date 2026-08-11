@@ -232,13 +232,13 @@
     <div class="card">
       <h2>Packages</h2>
       <div class="pkg"><span class="amt" id="pkgBegPrice">£190</span><b>Beginner Package</b><br>
-        <span class="muted">5 hours of lesson time — the perfect start for brand-new drivers.</span><br>
+        <span class="muted">5 hours of lesson time. The perfect start for brand new drivers.</span><br>
         <button class="btn sm" style="margin-top:8px" data-pkg="beginner" type="button">Request this package</button></div>
       <div class="pkg"><span class="amt" id="pkgMockPrice">£95</span><b>Mock Tests</b><br>
         <span class="muted">2 hours, conducted independently by qualified ADIs.</span><br>
         <button class="btn sm" style="margin-top:8px" data-pkg="mock" type="button">Request a mock test</button></div>
       <div class="pkg"><span class="amt">ask</span><b>Motorway Package</b><br>
-        <span class="muted">Designed to build confidence and experience following your practical test, or to extend your driving time.</span></div>
+        <span class="muted">Designed to build confidence and experience following your practical test or to extend your driving time.</span></div>
       <button class="btn" data-view="book" type="button">Book a lesson</button>
     </div>
 
@@ -272,7 +272,7 @@
 
     <div class="card" id="contactCard" style="display:none">
       <h2>Get in touch</h2>
-      <p class="muted">Questions, the Motorway Package, or prefer to arrange things by phone? Just ring or drop a message.</p>
+      <p class="muted">Questions about the Motorway Package or anything else? Ring or drop a message any time.</p>
       <p><a class="btn" id="cPhone" href="tel:" style="text-decoration:none">Call</a>
          <a class="btn" id="cEmail" href="mailto:" style="display:none; margin-left:8px; background:none; color:var(--text); border:1.5px solid var(--border)">Email</a></p>
     </div>
@@ -431,7 +431,7 @@ window.addEventListener('hashchange', () => switchView(location.hash.slice(1)));
 
 let CONFIG = {
   name: 'Driving Lessons', area: 'Local lessons with door-to-door pickup',
-  phone: '', email: '', hourly_rate: 44, hourly_rate_auto: 46,
+  phone: '', email: 'contact@ridewaepride.com', hourly_rate: 44, hourly_rate_auto: 46,
   min_duration: 60, max_duration: 240, prices: { manual: {}, automatic: {} },
   notice_hours: 12, cancel_notice_hours: 24, late_cancel_fee: 44,
   horizon_days: 21, durations: [30, 60, 90, 120, 150, 180, 210, 240],
