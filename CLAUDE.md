@@ -36,9 +36,13 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
   (see session history) — exercise slots/booking/cancel-fee/override paths.
 - Secrets: `ADMIN_KEY`, optional `NTFY_TOPIC` (instructor's own topic).
   D1 id lives in wrangler.toml (not secret).
-- **LIVE since 2026-07-31** at https://driving-booking.harris-stockdash.workers.dev
-  (workers.dev subdomain is account-wide, hence the stockdash-flavored host —
-  a custom domain replaces it once the owner buys one). D1 `driving-booking`
+- **LIVE since 2026-07-31**, at **https://ridewaepride.com** since 2026-08-14 —
+  zone 2b268d6a3ed37d5dde07961cb0a928f1 on the owner's Cloudflare account
+  (domain bought by the instructor at GoDaddy, nameservers moved); apex +
+  www attached as Workers custom domains via the account-level
+  workers/domains API (the deploy token can do this; it canNOT edit zone
+  DNS). The workers.dev URL (driving-booking.harris-stockdash.workers.dev)
+  still works as a fallback. D1 `driving-booking`
   id d6afe460-f234-4c9f-b168-a2ecfa18962a. Schema migrations = re-run
   schema.sql (CREATE TABLE IF NOT EXISTS only; never destructive on prod).
   Deploys via wrangler with an owner-pasted scoped token (Workers+D1 edit).
