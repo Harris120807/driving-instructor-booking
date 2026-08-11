@@ -199,6 +199,7 @@
         onerror="this.parentElement.style.display='none'"></div>
       <h1 id="hName">Driving Lessons</h1>
       <p id="hArea">Loading…</p>
+      <p style="margin:12px 0 0"><a class="btn sm" id="heroPhone" href="tel:" style="display:none; font-size:1.05rem; padding:10px 22px; text-decoration:none">Call</a></p>
       <div class="badges">
         <span class="badge">DVSA-approved instructors</span>
         <span class="badge">Manual &amp; automatic</span>
@@ -267,6 +268,13 @@
       <button class="btn sm" id="pkClose" type="button" style="margin-left:8px; background:none; color:var(--text); border:1.5px solid var(--border)">Cancel</button>
       <div class="msg" id="pkMsg"></div>
       <p class="muted">The instructor reviews every package request and will confirm with you directly — nothing is charged online.</p>
+    </div>
+
+    <div class="card" id="contactCard" style="display:none">
+      <h2>Get in touch</h2>
+      <p class="muted">Questions, the Motorway Package, or prefer to arrange things by phone? Just ring or drop a message.</p>
+      <p><a class="btn" id="cPhone" href="tel:" style="text-decoration:none">Call</a>
+         <a class="btn" id="cEmail" href="mailto:" style="display:none; margin-left:8px; background:none; color:var(--text); border:1.5px solid var(--border)">Email</a></p>
     </div>
   </div>
 
@@ -546,7 +554,26 @@ async function loadConfig() {
   $('hName').textContent = CONFIG.name;
   document.title = CONFIG.name + ' — book a driving lesson';
   $('hArea').textContent = CONFIG.area;
-  $('fContact').textContent = [CONFIG.phone, CONFIG.email].filter(Boolean).join(' · ');
+  const telHref = 'tel:' + String(CONFIG.phone || '').replace(/[^\d+]/g, '');
+  $('fContact').innerHTML = [
+    CONFIG.phone ? `<a href="${telHref}" style="color:inherit">${CONFIG.phone}</a>` : '',
+    CONFIG.email ? `<a href="mailto:${CONFIG.email}" style="color:inherit">${CONFIG.email}</a>` : '',
+  ].filter(Boolean).join(' · ');
+  if (CONFIG.phone || CONFIG.email) {
+    $('contactCard').style.display = '';
+    if (CONFIG.phone) {
+      $('heroPhone').style.display = 'inline-block';
+      $('heroPhone').href = telHref;
+      $('heroPhone').textContent = '📞 ' + CONFIG.phone;
+      $('cPhone').href = telHref;
+      $('cPhone').textContent = '📞 Call ' + CONFIG.phone;
+    } else $('cPhone').style.display = 'none';
+    if (CONFIG.email) {
+      $('cEmail').style.display = '';
+      $('cEmail').href = 'mailto:' + CONFIG.email;
+      $('cEmail').textContent = '✉️ ' + CONFIG.email;
+    }
+  }
   $('horizonNote').textContent =
     `Bookings open up to ${CONFIG.horizon_days} days ahead (minimum ${CONFIG.notice_hours}h notice to book). All times UK.`;
   $('policyLine').textContent =
