@@ -34,8 +34,26 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
 - **Testing before any push**: `node --check` the worker and both pages'
   extracted `<script>` blocks, and run the stubbed-D1 smoke test pattern
   (see session history) — exercise slots/booking/cancel-fee/override paths.
-- Secrets: `ADMIN_KEY`, optional `NTFY_TOPIC` (instructor's own topic).
+- Secrets: `ADMIN_KEY`, optional `NTFY_TOPIC` (instructor's own topic),
+  `RESEND_API_KEY` + `MAIL_FROM` (bookings@ridewaepride.com, send-only),
+  `REPLY_TO` (contact@ridewaepride.com — Resend reply_to on every outgoing
+  email so pupil replies reach the instructor's inbox).
   D1 id lives in wrangler.toml (not secret).
+- **Instructor mailbox (2026-08-11)**: contact@ridewaepride.com is a
+  GoDaddy-provisioned Microsoft 365 mailbox (instructor signs in at
+  email.godaddy.com / Outlook). DNS on the Cloudflare zone: apex MX →
+  ridewaepride-com.mail.protection.outlook.com (prio 0), apex TXT SPF
+  `v=spf1 include:secureserver.net -all` (an earlier hand-typed record had
+  typos — "spfl", space in secureserver.net — fixed in place), CNAME
+  autodiscover → autodiscover.outlook.com, plus pre-existing TXT
+  MS=ms35683938 (M365 domain verification). Resend (outgoing booking mail)
+  lives entirely on the send. subdomain — no conflict; don't merge the two
+  SPF records. DNS edits use the owner's email-scoped token
+  (CF_EMAIL_TOKEN, pasted in-session; the deploy token cannot edit DNS).
+  Site Settings `email` is set to contact@ so the public "Get in touch"
+  email button shows.
+- **wrangler pin**: `npx wrangler@4.28.1` — latest wrangler was broken
+  2026-08-11 (depends on unpublished miniflare alpha).
 - **LIVE since 2026-07-31**, at **https://ridewaepride.com** since 2026-08-14 —
   zone 2b268d6a3ed37d5dde07961cb0a928f1 on the owner's Cloudflare account
   (domain bought by the instructor at GoDaddy, nameservers moved); apex +
