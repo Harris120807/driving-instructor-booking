@@ -84,9 +84,17 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
   (Revi), Everything = joint; names editable in Settings. Scoping = `?type=`
   on /admin/summary, bookings, calendar, students, packages; legacy rows
   with NULL lesson_type count as manual. Students in a scoped view are
-  pupils with ≥1 lesson of that type, but their money figures stay
-  WHOLE-account (credit/charges are per pupil, not per instructor) — the
-  Outstanding KPI in a scoped view is that instructor's pupils' full owed.
+  pupils with ≥1 lesson of that type.
+- **Owed money is SPLIT per instructor (2026-08-11)** — they are paid
+  separately. `splitOwed()` in worker.js: each lesson's owed goes to that
+  lesson's type, package charges carry `charges.lesson_type` (set from the
+  request's transmission; NULL on legacy rows = manual), and the pupil's
+  single credit pot is applied MANUAL-FIRST, then automatic. That fixed order
+  is what guarantees `owed_manual + owed_automatic === owed` — don't switch
+  it to proportional without updating the tests that assert the sum. Served
+  as `outstanding_manual`/`outstanding_automatic` (summary),
+  `owed_manual`/`owed_automatic` on each student (scoped `owed` becomes that
+  instructor's share), and `split` on student detail.
 - **Admin UI conventions**: weekly series collapse to one ↻ line in Bookings
   (expand for per-week actions; confirm-all/cancel-all loop client-side over
   `/admin/booking`); Calendar tab reloads on every tab click via

@@ -120,6 +120,11 @@
   }
   .btn[disabled] { opacity: .5; cursor: default; }
   .btn.sm { padding: 6px 14px; font-size: .85rem; margin: 0; }
+  /* Hero contact pair — identical size/shape, text centred, left-aligned */
+  .herobtn {
+    font-size: 1.05rem; padding: 10px 22px; text-decoration: none; text-align: center;
+    min-width: 200px;
+  }
   .btn.danger { background: var(--bad); }
   .msg { margin-top: 12px; padding: 10px 14px; border-radius: 8px; display: none; }
   .msg.err { display: block; background: rgba(194,59,59,.12); color: var(--bad); }
@@ -199,7 +204,10 @@
         onerror="this.parentElement.style.display='none'"></div>
       <h1 id="hName">Driving Lessons</h1>
       <p id="hArea">Loading…</p>
-      <p style="margin:12px 0 0; text-align:center"><a class="btn sm" id="heroPhone" href="tel:" style="display:none; font-size:1.05rem; padding:10px 22px; text-decoration:none">Call</a></p>
+      <p style="margin:12px 0 0; display:flex; gap:8px; flex-wrap:wrap">
+        <a class="btn sm herobtn" id="heroPhone" href="tel:" style="display:none">Call us</a>
+        <a class="btn sm herobtn" id="heroEmail" href="mailto:" style="display:none">Email us</a>
+      </p>
       <div class="badges">
         <span class="badge">DVSA-approved instructors</span>
         <span class="badge">Manual &amp; automatic</span>
@@ -564,11 +572,14 @@ async function loadConfig() {
     if (CONFIG.phone) {
       $('heroPhone').style.display = 'inline-block';
       $('heroPhone').href = telHref;
-      $('heroPhone').textContent = '📞 ' + CONFIG.phone;
+      $('heroPhone').textContent = '📞 Call us';
       $('cPhone').href = telHref;
       $('cPhone').textContent = '📞 Call ' + CONFIG.phone;
     } else $('cPhone').style.display = 'none';
     if (CONFIG.email) {
+      $('heroEmail').style.display = 'inline-block';
+      $('heroEmail').href = 'mailto:' + CONFIG.email;
+      $('heroEmail').textContent = '✉️ Email us';
       $('cEmail').style.display = '';
       $('cEmail').href = 'mailto:' + CONFIG.email;
       $('cEmail').textContent = '✉️ ' + CONFIG.email;

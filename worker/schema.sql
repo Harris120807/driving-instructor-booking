@@ -76,9 +76,13 @@ CREATE TABLE IF NOT EXISTS charges (
   label      TEXT NOT NULL,                  -- e.g. 'Beginner Package'
   amount     REAL NOT NULL,                  -- £
   paid       INTEGER NOT NULL DEFAULT 0,
+  -- which instructor earned it (they are paid separately): 'manual' |
+  -- 'automatic'; NULL on pre-2026-08-11 rows and treated as manual
+  lesson_type TEXT DEFAULT 'manual',
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_charges_email ON charges(email);
+-- Live migration 2026-08-11: ALTER TABLE charges ADD COLUMN lesson_type TEXT DEFAULT 'manual';
 
 -- Pupil requests for fixed packages, reviewed in the console
 CREATE TABLE IF NOT EXISTS package_requests (

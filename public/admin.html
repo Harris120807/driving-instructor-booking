@@ -353,6 +353,7 @@
           <button class="btn ghost sm" id="sdPassed"></button>
         </div>
         <p class="muted" id="sdAccount"></p>
+        <p id="sdSplit" style="display:none"></p>
         <div class="grid" style="margin:12px 0">
           <div>
             <div class="field"><label for="sdNotes">Instructor notes (private — the pupil never sees these)</label>
@@ -588,9 +589,14 @@ async function loadSummary() {
   $('kWeek').textContent = fmtMoney(s.week_booked);
   $('kMonth').textContent = fmtMoney(s.month_booked);
   $('kCollected').textContent = fmtMoney(s.month_collected);
+  // Outstanding is per instructor — they're paid separately. The joint view
+  // shows the total plus how it breaks down.
   $('kOutstanding').textContent = fmtMoney(s.outstanding);
-  $('kOutLabel').textContent = SCOPE === 'all' ? 'Outstanding (all pupils)'
-    : `Outstanding (${INSTR[SCOPE] || ''}'s pupils)`;
+  $('kOutLabel').innerHTML = SCOPE === 'all'
+    ? 'Outstanding · all' + (s.outstanding_manual != null
+      ? `<br><span style="font-size:.78rem">${esc(INSTR.manual)} ${fmtMoney(s.outstanding_manual)} · ` +
+        `${esc(INSTR.automatic)} ${fmtMoney(s.outstanding_automatic)}</span>` : '')
+    : `Owed to ${esc(INSTR[SCOPE] || '')}`;
   const b = $('pendBadge');
   b.style.display = s.pending ? '' : 'none';
   b.textContent = s.pending;
@@ -1042,7 +1048,11 @@ async function loadStudents() {
       `<td>${s.lessons}</td><td>${s.upcoming}</td><td>${fmtMoney(s.upcoming_cost)}</td>` +
       `<td>${fmtMoney(s.credit)}${s.credit_min ? `<br><span class="muted">${fmtH(s.credit_min)} time</span>` : ''}` +
         `${s.credit_mock ? `<br><span class="muted">${s.credit_mock}× mock</span>` : ''}</td>` +
-      `<td>${s.owed > 0 ? `<span class="owed">${fmtMoney(s.owed)}</span>` : fmtMoney(0)}</td>` +
+      `<td>${s.owed > 0 ? `<span class="owed">${fmtMoney(s.owed)}</span>` : fmtMoney(0)}` +
+        // joint view: show who the money is owed to, since they're paid separately
+        `${SCOPE === 'all' && s.owed > 0 && s.owed_manual != null && s.owed_automatic > 0 && s.owed_manual > 0
+          ? `<br><span class="muted">${esc(INSTR.manual)} ${fmtMoney(s.owed_manual)} · ` +
+            `${esc(INSTR.automatic)} ${fmtMoney(s.owed_automatic)}</span>` : ''}</td>` +
       `<td>${testCell(s.test_date)}</td>`;
     if (studentView !== 'active') {
       const cell = document.createElement('td');
@@ -1096,7 +1106,7 @@ async function loadStudent(s) {
   curStudent = s;
   $('studentDetail').style.display = 'block';
   $('sdTitle').textContent = `${s.name} — account`;
-  let lessons, meta, hasAccount, charges = [];
+  let lessons, meta, hasAccount, charges = [], split = null;
   if (DEMO) {
     lessons = demoBookings().filter(b => b.email === s.email)
       .map(b => ({ ...b, past: b.date < new Date().toISOString().slice(0, 10), owed_now: 0 }));
@@ -1106,8 +1116,17 @@ async function loadStudent(s) {
     try {
       const j = await api('/admin/student?email=' + encodeURIComponent(s.email));
       lessons = j.lessons; meta = j.meta; hasAccount = j.has_account; charges = j.charges || [];
+      split = j.split;
     } catch (e) { err($('sdMsg'), e.message); return; }
   }
+  // Owed money split by instructor — they're paid separately
+  const sp = $('sdSplit');
+  if (split && (split.owed_manual || split.owed_automatic)) {
+    sp.style.display = '';
+    sp.innerHTML = 'Owes <span class="owed">' + fmtMoney(split.owed_manual) + '</span> to ' +
+      esc(INSTR.manual) + ' (manual) and <span class="owed">' + fmtMoney(split.owed_automatic) +
+      '</span> to ' + esc(INSTR.automatic) + ' (automatic).';
+  } else sp.style.display = 'none';
   $('sdNotes').value = meta.notes;
   $('sdCredit').textContent = fmtMoney(meta.credit);
   $('sdCreditMin').textContent = fmtH(meta.credit_min || 0);

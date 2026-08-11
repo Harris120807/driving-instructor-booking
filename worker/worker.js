@@ -392,6 +392,27 @@ function upcomingCostOf(now, b) {
   return (b.status !== 'cancelled' && !lessonPast(now, b)) ? b.price : 0;
 }
 
+// The two instructors are paid separately, so a pupil's owed money is split by
+// which instructor earned it: manual lessons (and manual package charges) to
+// one, automatic to the other. Credit is a single per-pupil pot, so it is
+// applied manual-first, then automatic — a fixed order that guarantees the two
+// instructor figures always add up to the pupil's joint owed.
+function splitOwed(now, rows, charges, credit) {
+  const gross = { manual: 0, automatic: 0 };
+  for (const r of rows) gross[r.lesson_type === 'automatic' ? 'automatic' : 'manual'] += owedOf(now, r);
+  for (const ch of charges || [])
+    if (!ch.paid) gross[ch.lesson_type === 'automatic' ? 'automatic' : 'manual'] += ch.amount;
+  let left = credit || 0;
+  const useManual = Math.min(left, gross.manual);
+  left -= useManual;
+  const useAuto = Math.min(left, gross.automatic);
+  return {
+    gross_manual: gross.manual, gross_automatic: gross.automatic,
+    owed_manual: Math.max(0, gross.manual - useManual),
+    owed_automatic: Math.max(0, gross.automatic - useAuto),
+  };
+}
+
 async function studentMeta(env, email) {
   return (await env.DB.prepare('SELECT * FROM students WHERE email = ?').bind(email).first())
     || { email, notes: '', passed: 0, credit: 0, credit_min: 0, credit_mock: 0, archived: 0 };
@@ -839,12 +860,19 @@ export default {
           const weekStart = addDays(now.date, -dow), weekEnd = addDays(weekStart, 6);
           const month = now.date.slice(0, 7);
           let weekBooked = 0, monthBooked = 0, monthCollected = 0, pending = 0;
-          const gross = new Map(), scoped = new Set();
-          for (const ch of (await env.DB.prepare('SELECT * FROM charges').all()).results)
-            if (!ch.paid) gross.set(ch.email, (gross.get(ch.email) || 0) + ch.amount);
+          const allCharges = (await env.DB.prepare('SELECT * FROM charges').all()).results;
+          const chargesByEmail = new Map();
+          for (const ch of allCharges) {
+            if (!chargesByEmail.has(ch.email)) chargesByEmail.set(ch.email, []);
+            chargesByEmail.get(ch.email).push(ch);
+          }
+          const rowsByEmail = new Map();
+          for (const r of rows) {
+            if (!rowsByEmail.has(r.email)) rowsByEmail.set(r.email, []);
+            rowsByEmail.get(r.email).push(r);
+          }
           for (const r of rows) {
             if (inScope(scope, r)) {
-              scoped.add(r.email);
               if (r.status === 'pending' && !lessonPast(now, r)) pending++;
               if (r.status !== 'cancelled') {
                 if (r.date >= weekStart && r.date <= weekEnd) weekBooked += r.price;
@@ -856,17 +884,25 @@ export default {
                 monthCollected += r.fee;
               }
             }
-            gross.set(r.email, (gross.get(r.email) || 0) + owedOf(now, r));
           }
+          // Outstanding is split per instructor (they're paid separately);
+          // the scoped view reports that instructor's share only.
           const creditBy = new Map(metas.map(m => [m.email, m.credit || 0]));
           const archived = new Set(metas.filter(m => m.archived).map(m => m.email));
-          let outstanding = 0;
-          for (const [em, g] of gross)
-            if (!archived.has(em) && (!scope || scoped.has(em)))
-              outstanding += Math.max(0, g - (creditBy.get(em) || 0));
+          let owedManual = 0, owedAuto = 0;
+          for (const em of new Set([...rowsByEmail.keys(), ...chargesByEmail.keys()])) {
+            if (archived.has(em)) continue;
+            const sp = splitOwed(now, rowsByEmail.get(em) || [],
+              chargesByEmail.get(em) || [], creditBy.get(em) || 0);
+            owedManual += sp.owed_manual;
+            owedAuto += sp.owed_automatic;
+          }
+          const outstanding = scope === 'manual' ? owedManual
+            : scope === 'automatic' ? owedAuto : owedManual + owedAuto;
           return json({
             week_booked: weekBooked, month_booked: monthBooked,
             month_collected: monthCollected, outstanding, pending,
+            outstanding_manual: owedManual, outstanding_automatic: owedAuto,
           });
         }
 
@@ -1005,9 +1041,17 @@ export default {
             ? new Set(rows.filter(r => inScope(scope, r)).map(r => r.email)) : null;
           const metas = new Map((await env.DB.prepare('SELECT * FROM students').all())
             .results.map(m => [m.email, m]));
-          const chargesBy = new Map();
-          for (const ch of (await env.DB.prepare('SELECT * FROM charges').all()).results)
+          const chargesBy = new Map(), chargeRows = new Map();
+          for (const ch of (await env.DB.prepare('SELECT * FROM charges').all()).results) {
             if (!ch.paid) chargesBy.set(ch.email, (chargesBy.get(ch.email) || 0) + ch.amount);
+            if (!chargeRows.has(ch.email)) chargeRows.set(ch.email, []);
+            chargeRows.get(ch.email).push(ch);
+          }
+          const lessonRows = new Map();
+          for (const r of rows) {
+            if (!lessonRows.has(r.email)) lessonRows.set(r.email, []);
+            lessonRows.get(r.email).push(r);
+          }
           const now = ukNowParts();
           const map = new Map();
           for (const r of rows) {
@@ -1035,6 +1079,13 @@ export default {
             s.test_date = m.test_date || null;
             s.has_notes = !!(m.notes && m.notes.trim());
             s.owed = Math.max(0, s.gross_owed - s.credit);
+            // Per-instructor split — in a scoped view `owed` becomes that
+            // instructor's share, so the list totals what they're owed
+            const sp = splitOwed(now, lessonRows.get(s.email) || [],
+              chargeRows.get(s.email) || [], s.credit);
+            s.owed_manual = sp.owed_manual;
+            s.owed_automatic = sp.owed_automatic;
+            if (scope) s.owed = scope === 'automatic' ? sp.owed_automatic : sp.owed_manual;
             return s;
           }).filter(s => view === 'archived' ? s.archived
             : view === 'passed' ? (s.passed && !s.archived)
@@ -1066,6 +1117,7 @@ export default {
               credit_min: meta.credit_min || 0, credit_mock: meta.credit_mock || 0, archived: !!meta.archived,
               test_date: meta.test_date || null },
             gross_owed: gross, owed: Math.max(0, gross - (meta.credit || 0)),
+            split: splitOwed(now, rows, chRows, meta.credit || 0),
             has_account: hasAccount,
           });
         }
@@ -1098,8 +1150,10 @@ export default {
             else m.credit_min = (m.credit_min || 0) + pkg.minutes;
             await putStudentMeta(env, { ...m, email: row.email });
             await env.DB.prepare(
-              'INSERT INTO charges (email, label, amount, paid, created_at) VALUES (?, ?, ?, 0, ?)'
-            ).bind(row.email, pkg.label, pkg.price, Math.floor(Date.now() / 1000)).run();
+              'INSERT INTO charges (email, label, amount, paid, lesson_type, created_at) VALUES (?, ?, ?, 0, ?, ?)'
+            ).bind(row.email, pkg.label, pkg.price,
+              row.lesson_type === 'automatic' ? 'automatic' : 'manual',
+              Math.floor(Date.now() / 1000)).run();
           }
           await env.DB.prepare('UPDATE package_requests SET status = ? WHERE id = ?')
             .bind(b.action === 'accept' ? 'accepted' : 'declined', b.id).run();
