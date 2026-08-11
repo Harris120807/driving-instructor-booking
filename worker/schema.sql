@@ -117,3 +117,19 @@ CREATE TABLE IF NOT EXISTS attempts (
   at     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attempts ON attempts(bucket, at);
+
+-- Admin accounts (2026-08-11): email+password sign-in for the console; the
+-- shared ADMIN_KEY is the proof required to create an account (or reset a
+-- forgotten password). The raw key still works as a bearer token directly.
+CREATE TABLE IF NOT EXISTS admins (
+  email TEXT PRIMARY KEY,
+  name TEXT DEFAULT '',
+  pw_hash TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  token_hash TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  expires INTEGER NOT NULL
+);

@@ -73,6 +73,20 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
 - **Credit/passed/notes** live in D1 `students` keyed by lowercased email;
   displayed owed = gross − credit, floor 0; `/admin/pay-from-credit` is the
   atomic settle path. "Passed" only filters the default list — data is kept.
+- **Admin accounts + two-instructor dashboards (2026-08-11)**: /admin sign-in
+  is email+password (`admins` + `admin_sessions` D1 tables, same PBKDF2/90d
+  pattern as pupils); creating an account (or resetting a password) requires
+  the shared ADMIN_KEY in the same form — re-register with the key = password
+  reset (kills that account's sessions). The RAW key alone still works as a
+  bearer token everywhere (recovery + API compat) — email left blank on the
+  form. Console has a three-chip dashboard switcher: manual lessons =
+  `instructor_manual`'s dash (George), automatic = `instructor_auto`'s
+  (Revi), Everything = joint; names editable in Settings. Scoping = `?type=`
+  on /admin/summary, bookings, calendar, students, packages; legacy rows
+  with NULL lesson_type count as manual. Students in a scoped view are
+  pupils with ≥1 lesson of that type, but their money figures stay
+  WHOLE-account (credit/charges are per pupil, not per instructor) — the
+  Outstanding KPI in a scoped view is that instructor's pupils' full owed.
 - **Admin UI conventions**: weekly series collapse to one ↻ line in Bookings
   (expand for per-week actions; confirm-all/cancel-all loop client-side over
   `/admin/booking`); Calendar tab reloads on every tab click via

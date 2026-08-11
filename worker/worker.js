@@ -32,6 +32,8 @@ const DEFAULT_CONFIG = {
   cancel_notice_hours: 24, // cancelling closer than this to the lesson incurs the fee
   late_cancel_fee: 44,     // £ owed for a late cancellation
   horizon_days: 21,        // how far ahead pupils can book
+  instructor_manual: 'George',  // manual lessons belong to this instructor's dash
+  instructor_auto: 'Revi',      // automatic lessons belong to this one's
 };
 
 const DEFAULT_TEMPLATE = {
@@ -136,12 +138,35 @@ async function newSession(env, email) {
   return token;
 }
 
+// Admin auth: the raw ADMIN_KEY as a bearer token, or an admin-account
+// session token (created via /admin/auth/* with the key as first-time proof)
 async function isAdmin(req, env) {
   const auth = req.headers.get('Authorization') || '';
   const key = auth.replace(/^Bearer\s+/i, '');
   if (!key || !env.ADMIN_KEY) return false;
-  return (await sha256Hex(key)) === (await sha256Hex(env.ADMIN_KEY));
+  if ((await sha256Hex(key)) === (await sha256Hex(env.ADMIN_KEY))) return true;
+  if (!/^[0-9a-f]{64}$/.test(key)) return false;
+  const row = await env.DB.prepare('SELECT email, expires FROM admin_sessions WHERE token_hash = ?')
+    .bind(await sha256Hex(key)).first();
+  return !!row && row.expires >= Math.floor(Date.now() / 1000);
 }
+
+async function newAdminSession(env, email) {
+  const token = randomHex(32);
+  await env.DB.prepare('INSERT INTO admin_sessions (token_hash, email, expires) VALUES (?, ?, ?)')
+    .bind(await sha256Hex(token), email, Math.floor(Date.now() / 1000) + 90 * 86400).run();
+  return token;
+}
+
+// Instructor scoping: manual lessons = George's dash, automatic = Revi's.
+// null scope = the joint dashboard. Legacy rows with no lesson_type count
+// as manual.
+function scopeOf(url) {
+  const t = url.searchParams.get('type');
+  return t === 'manual' || t === 'automatic' ? t : null;
+}
+const inScope = (t, r) =>
+  !t || (t === 'automatic' ? r.lesson_type === 'automatic' : r.lesson_type !== 'automatic');
 
 // --- UK local time helpers -------------------------------------------------
 
@@ -751,12 +776,62 @@ export default {
         }
       }
 
+      // ---- admin auth (no gate — these CREATE the credentials) ----
+      // Register needs the shared ADMIN_KEY as proof; it also serves as
+      // password reset (re-register with the key sets a new password and
+      // signs out that account's other sessions). Login is email+password.
+      if ((path === '/admin/auth/register' || path === '/admin/auth/login') && req.method === 'POST') {
+        const ip = req.headers.get('CF-Connecting-IP') || 'unknown';
+        if (await rateLimited(env, `aauth:${ip}`, 20, 3600))
+          return json({ error: 'Too many attempts — please try again later.' }, 429);
+        const b = await readBody(req);
+        const email = String(b?.email || '').trim().toLowerCase();
+        const password = String(b?.password || '');
+        if (!RE_EMAIL.test(email) || email.length > 200)
+          return json({ error: 'Please give a valid email.' }, 400);
+
+        if (path === '/admin/auth/register') {
+          if (password.length < 8)
+            return json({ error: 'Password must be at least 8 characters.' }, 400);
+          const key = String(b?.key || '');
+          if (!key || !env.ADMIN_KEY || (await sha256Hex(key)) !== (await sha256Hex(env.ADMIN_KEY)))
+            return json({ error: 'Admin key not accepted.' }, 401);
+          const name = String(b?.name || '').trim().slice(0, 40);
+          const salt = randomHex(16);
+          const hash = await pbkdf2Hex(password, salt);
+          await env.DB.prepare(
+            `INSERT INTO admins (email, name, pw_hash, salt, created_at) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(email) DO UPDATE SET pw_hash = excluded.pw_hash, salt = excluded.salt,
+               name = CASE WHEN excluded.name != '' THEN excluded.name ELSE admins.name END`
+          ).bind(email, name, hash, salt, Math.floor(Date.now() / 1000)).run();
+          await env.DB.prepare('DELETE FROM admin_sessions WHERE email = ?').bind(email).run();
+          return json({ token: await newAdminSession(env, email), email });
+        }
+
+        const a = await env.DB.prepare('SELECT * FROM admins WHERE email = ?').bind(email).first();
+        if (!a || (await pbkdf2Hex(password, a.salt)) !== a.pw_hash)
+          return json({ error: 'Wrong email or password.' }, 401);
+        return json({ token: await newAdminSession(env, email), email, name: a.name || '' });
+      }
+
+      if (path === '/admin/auth/logout' && req.method === 'POST') {
+        const tok = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+        if (/^[0-9a-f]{64}$/.test(tok))
+          await env.DB.prepare('DELETE FROM admin_sessions WHERE token_hash = ?')
+            .bind(await sha256Hex(tok)).run();
+        return json({ ok: true });
+      }
+
       // ---- admin ----
       if (path.startsWith('/admin/')) {
         if (!(await isAdmin(req, env))) return json({ error: 'unauthorized' }, 401);
 
-        // Console KPIs: booked/collected money + outstanding + pending count
+        // Console KPIs: booked/collected money + outstanding + pending count.
+        // ?type=manual|automatic scopes the money/pending to one instructor's
+        // lessons; Outstanding then covers that instructor's pupils but keeps
+        // each pupil's FULL account (money is per pupil, not per instructor).
         if (path === '/admin/summary' && req.method === 'GET') {
+          const scope = scopeOf(url);
           const rows = (await env.DB.prepare('SELECT * FROM bookings').all()).results;
           const metas = (await env.DB.prepare('SELECT * FROM students').all()).results;
           const now = ukNowParts();
@@ -764,19 +839,22 @@ export default {
           const weekStart = addDays(now.date, -dow), weekEnd = addDays(weekStart, 6);
           const month = now.date.slice(0, 7);
           let weekBooked = 0, monthBooked = 0, monthCollected = 0, pending = 0;
-          const gross = new Map();
+          const gross = new Map(), scoped = new Set();
           for (const ch of (await env.DB.prepare('SELECT * FROM charges').all()).results)
             if (!ch.paid) gross.set(ch.email, (gross.get(ch.email) || 0) + ch.amount);
           for (const r of rows) {
-            if (r.status === 'pending' && !lessonPast(now, r)) pending++;
-            if (r.status !== 'cancelled') {
-              if (r.date >= weekStart && r.date <= weekEnd) weekBooked += r.price;
-              if (r.date.startsWith(month)) {
-                monthBooked += r.price;
-                if (r.paid) monthCollected += r.price;
+            if (inScope(scope, r)) {
+              scoped.add(r.email);
+              if (r.status === 'pending' && !lessonPast(now, r)) pending++;
+              if (r.status !== 'cancelled') {
+                if (r.date >= weekStart && r.date <= weekEnd) weekBooked += r.price;
+                if (r.date.startsWith(month)) {
+                  monthBooked += r.price;
+                  if (r.paid) monthCollected += r.price;
+                }
+              } else if (r.fee > 0 && r.paid && r.date.startsWith(month)) {
+                monthCollected += r.fee;
               }
-            } else if (r.fee > 0 && r.paid && r.date.startsWith(month)) {
-              monthCollected += r.fee;
             }
             gross.set(r.email, (gross.get(r.email) || 0) + owedOf(now, r));
           }
@@ -784,7 +862,8 @@ export default {
           const archived = new Set(metas.filter(m => m.archived).map(m => m.email));
           let outstanding = 0;
           for (const [em, g] of gross)
-            if (!archived.has(em)) outstanding += Math.max(0, g - (creditBy.get(em) || 0));
+            if (!archived.has(em) && (!scope || scoped.has(em)))
+              outstanding += Math.max(0, g - (creditBy.get(em) || 0));
           return json({
             week_booked: weekBooked, month_booked: monthBooked,
             month_collected: monthCollected, outstanding, pending,
@@ -849,9 +928,12 @@ export default {
 
         if (path === '/admin/bookings' && req.method === 'GET') {
           const status = url.searchParams.get('status');
+          const scope = scopeOf(url);
+          const typeSql = scope === 'automatic' ? " AND lesson_type = 'automatic'"
+            : scope === 'manual' ? " AND (lesson_type IS NULL OR lesson_type != 'automatic')" : '';
           const q = status
-            ? env.DB.prepare('SELECT * FROM bookings WHERE status = ? AND hidden = 0 ORDER BY date, time LIMIT 500').bind(status)
-            : env.DB.prepare("SELECT * FROM bookings WHERE date >= date('now', '-7 day') AND hidden = 0 ORDER BY date, time LIMIT 500");
+            ? env.DB.prepare(`SELECT * FROM bookings WHERE status = ? AND hidden = 0${typeSql} ORDER BY date, time LIMIT 500`).bind(status)
+            : env.DB.prepare(`SELECT * FROM bookings WHERE date >= date('now', '-7 day') AND hidden = 0${typeSql} ORDER BY date, time LIMIT 500`);
           return json({ bookings: (await q.all()).results });
         }
 
@@ -873,9 +955,10 @@ export default {
           const from = url.searchParams.get('from'), to = url.searchParams.get('to');
           if (!RE_DATE.test(from || '') || !RE_DATE.test(to || '') || daysBetween(from, to) > 62)
             return json({ error: 'bad params' }, 400);
+          const scope = scopeOf(url);
           const bookings = (await env.DB.prepare(
             'SELECT * FROM bookings WHERE date >= ? AND date <= ? AND hidden = 0 ORDER BY date, time'
-          ).bind(from, to).all()).results;
+          ).bind(from, to).all()).results.filter(r => inScope(scope, r));
           return json({ bookings, blocked: [...await blockedDates(env, from, to)] });
         }
 
@@ -917,6 +1000,9 @@ export default {
           const view = url.searchParams.get('view') ||
             (url.searchParams.get('passed') === '1' ? 'passed' : 'active');
           const rows = (await env.DB.prepare('SELECT * FROM bookings ORDER BY created_at').all()).results;
+          const scope = scopeOf(url);
+          const scopedEmails = scope
+            ? new Set(rows.filter(r => inScope(scope, r)).map(r => r.email)) : null;
           const metas = new Map((await env.DB.prepare('SELECT * FROM students').all())
             .results.map(m => [m.email, m]));
           const chargesBy = new Map();
@@ -953,6 +1039,9 @@ export default {
           }).filter(s => view === 'archived' ? s.archived
             : view === 'passed' ? (s.passed && !s.archived)
             : (!s.passed && !s.archived))
+            // Scoped view: only pupils with at least one of this instructor's
+            // lessons; their money figures stay whole-account.
+            .filter(s => !scopedEmails || scopedEmails.has(s.email))
             .sort((a, b2) => b2.owed - a.owed || a.name.localeCompare(b2.name));
           return json({ students });
         }
@@ -982,9 +1071,11 @@ export default {
         }
 
         if (path === '/admin/packages' && req.method === 'GET') {
+          const scope = scopeOf(url);
           return json({
             requests: (await env.DB.prepare(
-              'SELECT * FROM package_requests ORDER BY created_at DESC LIMIT 100').all()).results,
+              'SELECT * FROM package_requests ORDER BY created_at DESC LIMIT 100').all())
+              .results.filter(r => inScope(scope, r)),
             packages: packageInfo(await getSetting(env, 'config', DEFAULT_CONFIG)),
           });
         }
@@ -1195,6 +1286,8 @@ export default {
             motorway_minutes: DURATIONS.includes(parseInt(c.motorway_minutes, 10))
               ? parseInt(c.motorway_minutes, 10) : 120,
             motorway_price: num(c.motorway_price, 0, 2000, 0),
+            instructor_manual: String(c.instructor_manual || DEFAULT_CONFIG.instructor_manual).slice(0, 40),
+            instructor_auto: String(c.instructor_auto || DEFAULT_CONFIG.instructor_auto).slice(0, 40),
           };
           await putSetting(env, 'config', clean);
           return json({ ok: true });

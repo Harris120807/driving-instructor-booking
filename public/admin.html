@@ -180,10 +180,16 @@
     <img src="/logo.png" alt="" style="max-width:100%; margin-bottom:10px"
       onerror="this.style.display='none'">
     <h2>Instructor sign-in</h2>
-    <p class="muted">Enter your admin key. It stays on this device only.</p>
+    <p class="muted">Sign in with your email and password. <b>First time here</b> (or forgotten
+      your password)? Fill in the admin key as well — that links it to your account, and from
+      then on you only need your email and password.</p>
     <form id="loginForm">
-      <div class="field"><label for="keyInput">Admin key</label>
-        <input id="keyInput" type="password" autocomplete="current-password" style="width:100%"></div>
+      <div class="field"><label for="aEmail">Email</label>
+        <input id="aEmail" type="email" autocomplete="email" style="width:100%"></div>
+      <div class="field"><label for="aPass">Password</label>
+        <input id="aPass" type="password" autocomplete="current-password" style="width:100%"></div>
+      <div class="field"><label for="keyInput">Admin key — first sign-in or password reset only</label>
+        <input id="keyInput" type="password" autocomplete="off" style="width:100%"></div>
       <button class="btn" type="submit">Sign in</button>
       <div class="msg" id="loginMsg"></div>
     </form>
@@ -193,6 +199,12 @@
     <div class="topbar">
       <h1 id="consTitle">Instructor console</h1>
       <button class="btn ghost sm" id="signOut">Sign out</button>
+    </div>
+
+    <div class="filters" id="dashSel" style="margin-bottom:10px">
+      <button class="chip" data-scope="manual" id="chipMan">George · manual</button>
+      <button class="chip" data-scope="automatic" id="chipAuto">Revi · automatic</button>
+      <button class="chip sel" data-scope="all">Everything</button>
     </div>
 
     <div class="tabs" id="tabs">
@@ -209,7 +221,7 @@
           <div class="kpi"><div class="v" id="kWeek">£0</div><div class="l">Booked this week</div></div>
           <div class="kpi"><div class="v" id="kMonth">£0</div><div class="l">Booked this month</div></div>
           <div class="kpi"><div class="v" id="kCollected">£0</div><div class="l">Collected this month</div></div>
-          <div class="kpi owe"><div class="v" id="kOutstanding">£0</div><div class="l">Outstanding (all pupils)</div></div>
+          <div class="kpi owe"><div class="v" id="kOutstanding">£0</div><div class="l" id="kOutLabel">Outstanding (all pupils)</div></div>
         </div>
       </div>
       <div class="card" id="pkgReqCard">
@@ -428,6 +440,14 @@
             <input id="sRateAuto" type="number" min="0" step="0.5"></div>
         </div>
         <div class="field"><div class="hint">Lesson price = rate × length, e.g. £44/h makes a 1½-hour manual lesson £66.</div></div>
+        <h2 style="margin-top:18px">Instructors</h2>
+        <div class="prices3">
+          <div class="field"><label for="sInstrMan">Manual lessons taught by</label>
+            <input id="sInstrMan" maxlength="40"></div>
+          <div class="field"><label for="sInstrAuto">Automatic lessons taught by</label>
+            <input id="sInstrAuto" maxlength="40"></div>
+        </div>
+        <div class="field"><div class="hint">Names the two dashboards at the top of the console. Manual bookings appear on the first instructor’s dashboard, automatic on the second’s; “Everything” shows the whole business.</div></div>
         <h2 style="margin-top:18px">Lesson lengths pupils can book</h2>
         <div class="prices3">
           <div class="field"><label for="sMinLen">Shortest</label>
@@ -484,7 +504,17 @@
 const $ = id => document.getElementById(id);
 let DEMO = false;
 const DAYS = [['mon','Mon'],['tue','Tue'],['wed','Wed'],['thu','Thu'],['fri','Fri'],['sat','Sat'],['sun','Sun']];
-let KEY = sessionStorage.getItem('di-admin-key') || '';
+// Auth token: an admin-account session token, or the raw admin key (legacy /
+// recovery path). Kept in localStorage so sign-in survives closing the tab.
+let AUTH = null;
+try { AUTH = JSON.parse(localStorage.getItem('di-admin-auth') || 'null'); } catch {}
+let KEY = AUTH?.token || sessionStorage.getItem('di-admin-key') || '';
+
+// Dashboard scope: George = manual, Revi = automatic, all = joint view.
+// Names come from Settings; 'manual'/'automatic' is what the server filters on.
+let SCOPE = localStorage.getItem('di-admin-scope') || 'all';
+let INSTR = { manual: 'George', automatic: 'Revi' };
+const scopeQ = sep => SCOPE === 'all' ? '' : sep + 'type=' + SCOPE;
 
 async function api(path, opts = {}) {
   opts.headers = { ...(opts.headers || {}), Authorization: 'Bearer ' + KEY };
@@ -513,30 +543,34 @@ const fmtWhen = (date, time) => new Date(date + 'T12:00:00')
   .toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) + (time ? ' ' + time : '');
 
 function signOut() {
-  KEY = '';
+  if (KEY && !DEMO) fetch('/admin/auth/logout',
+    { method: 'POST', headers: { Authorization: 'Bearer ' + KEY } }).catch(() => {});
+  KEY = ''; AUTH = null;
+  localStorage.removeItem('di-admin-auth');
   sessionStorage.removeItem('di-admin-key');
   $('console').style.display = 'none';
   $('login').style.display = 'block';
 }
 
-async function signIn(key) {
-  KEY = key;
-  // Detect demo mode (no backend at all) vs a wrong key
+async function signIn(token) {
+  KEY = token;
+  // Detect demo mode (no backend at all) vs a rejected credential
   try {
     const r = await fetch('/admin/settings', { headers: { Authorization: 'Bearer ' + KEY } });
-    if (r.status === 401) throw new Error('Key not accepted.');
+    if (r.status === 401) throw new Error('Sign-in not accepted.');
     await r.json();
   } catch (e) {
     if (String(e.message).includes('not accepted')) throw e;
     DEMO = true; // network-level failure = previewing without a backend
   }
-  sessionStorage.setItem('di-admin-key', key);
+  localStorage.setItem('di-admin-auth', JSON.stringify(AUTH || { token }));
   enter();
 }
 
 function enter() {
   $('login').style.display = 'none';
   $('console').style.display = 'block';
+  paintScope();
   loadBookings();
   loadCalendar();
   loadStudents();
@@ -549,12 +583,14 @@ async function loadSummary() {
   let s;
   if (DEMO) s = { week_booked: 132, month_booked: 528, month_collected: 264, outstanding: 44, pending: 1 };
   else {
-    try { s = await api('/admin/summary'); } catch { return; }
+    try { s = await api('/admin/summary' + scopeQ('?')); } catch { return; }
   }
   $('kWeek').textContent = fmtMoney(s.week_booked);
   $('kMonth').textContent = fmtMoney(s.month_booked);
   $('kCollected').textContent = fmtMoney(s.month_collected);
   $('kOutstanding').textContent = fmtMoney(s.outstanding);
+  $('kOutLabel').textContent = SCOPE === 'all' ? 'Outstanding (all pupils)'
+    : `Outstanding (${INSTR[SCOPE] || ''}'s pupils)`;
   const b = $('pendBadge');
   b.style.display = s.pending ? '' : 'none';
   b.textContent = s.pending;
@@ -563,10 +599,56 @@ async function loadSummary() {
 
 $('loginForm').addEventListener('submit', async e => {
   e.preventDefault();
-  try { await signIn($('keyInput').value.trim()); }
-  catch (e2) { err($('loginMsg'), e2.message); }
+  const email = $('aEmail').value.trim().toLowerCase();
+  const pass = $('aPass').value;
+  const key = $('keyInput').value.trim();
+  try {
+    if (!email && key) { // raw admin key alone still works (recovery path)
+      AUTH = { token: key };
+      await signIn(key);
+      return;
+    }
+    if (!email || !pass) { err($('loginMsg'), 'Enter your email and password.'); return; }
+    let j = {};
+    try {
+      const r = await fetch(key ? '/admin/auth/register' : '/admin/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(key ? { email, password: pass, key } : { email, password: pass }),
+      });
+      j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error ||
+        (key ? 'Could not create the account.' : 'Wrong email or password.'));
+    } catch (e3) {
+      if (e3 instanceof TypeError) { DEMO = true; enter(); return; } // no backend = preview
+      throw e3;
+    }
+    AUTH = { token: j.token, email };
+    await signIn(j.token);
+  } catch (e2) { err($('loginMsg'), e2.message); }
 });
 $('signOut').onclick = signOut;
+
+// --- dashboard switcher (George / Revi / Everything) ---
+function paintScope() {
+  document.querySelectorAll('#dashSel .chip').forEach(c =>
+    c.classList.toggle('sel', c.dataset.scope === SCOPE));
+  $('chipMan').textContent = INSTR.manual + ' · manual';
+  $('chipAuto').textContent = INSTR.automatic + ' · automatic';
+  const who = SCOPE === 'manual' ? INSTR.manual : SCOPE === 'automatic' ? INSTR.automatic : null;
+  $('consTitle').textContent = who ? who + "'s dashboard" : (CONS_NAME || 'Instructor console');
+}
+let CONS_NAME = '';
+$('dashSel').addEventListener('click', e => {
+  const c = e.target.closest('.chip[data-scope]');
+  if (!c || c.dataset.scope === SCOPE) return;
+  SCOPE = c.dataset.scope;
+  localStorage.setItem('di-admin-scope', SCOPE);
+  paintScope();
+  // Pre-select the matching transmission on the Add-booking form
+  if (SCOPE !== 'all')
+    document.querySelector(`[data-abtype="${SCOPE === 'automatic' ? 'automatic' : 'manual'}"]`)?.click();
+  loadBookings(); loadStudents(); loadCalendar();
+});
 
 // Tabs — pane list driven entirely by data-pane attributes
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
@@ -623,7 +705,7 @@ async function loadPackages() {
   const el = $('pkgReqList');
   if (DEMO) { el.textContent = 'No package requests yet.'; return; }
   let j;
-  try { j = await api('/admin/packages'); }
+  try { j = await api('/admin/packages' + scopeQ('?')); }
   catch (e) { el.textContent = e.message; return; }
   const pending = j.requests.filter(r => r.status === 'pending');
   const done = j.requests.filter(r => r.status !== 'pending').slice(0, 5);
@@ -680,7 +762,8 @@ async function loadBookings() {
     rows = demoBookings().filter(b => (!bookingsFilter || b.status === bookingsFilter) && !demoHidden.has(b.ref));
   } else {
     try {
-      rows = (await api('/admin/bookings' + (bookingsFilter ? '?status=' + bookingsFilter : ''))).bookings;
+      rows = (await api('/admin/bookings' +
+        (bookingsFilter ? '?status=' + bookingsFilter + scopeQ('&') : scopeQ('?')))).bookings;
     } catch (e) { err($('bMsg'), e.message); return; }
   }
   const tb = $('bookingsBody'); tb.innerHTML = '';
@@ -939,7 +1022,7 @@ async function loadStudents() {
     studentView === 'archived' ? !!s.archived
     : studentView === 'passed' ? (!!s.passed && !s.archived) : (!s.passed && !s.archived));
   else {
-    try { students = (await api('/admin/students?view=' + studentView)).students; }
+    try { students = (await api('/admin/students?view=' + studentView + scopeQ('&'))).students; }
     catch (e) { $('studentsBody').innerHTML = `<tr><td colspan="9" class="muted">${esc(e.message)}</td></tr>`; return; }
   }
   if (studentView === 'active') STUDENTS = students;
@@ -1260,7 +1343,7 @@ async function loadWeek() {
   if (DEMO) {
     data = { bookings: demoBookings().filter(b => b.date >= days[0] && b.date <= days[6]), blocked: [] };
   } else {
-    try { data = await api(`/admin/calendar?from=${days[0]}&to=${days[6]}`); }
+    try { data = await api(`/admin/calendar?from=${days[0]}&to=${days[6]}` + scopeQ('&')); }
     catch (e) { err($('calMsg'), e.message); return; }
   }
   $('calTitle').textContent = 'Week of ' + new Date(weekStart + 'T12:00:00')
@@ -1361,7 +1444,7 @@ async function loadCalendar() {
   if (DEMO) {
     data = { bookings: demoBookings().filter(b => b.date >= iso(first) && b.date <= iso(last)), blocked: [] };
   } else {
-    try { data = await api(`/admin/calendar?from=${iso(first)}&to=${iso(last)}`); }
+    try { data = await api(`/admin/calendar?from=${iso(first)}&to=${iso(last)}` + scopeQ('&')); }
     catch (e) { err($('calMsg'), e.message); return; }
   }
   $('calTitle').textContent = first.toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -1582,7 +1665,11 @@ async function loadSettings() {
   $('sFee').value = c.late_cancel_fee; $('sHorizon').value = c.horizon_days;
   $('sPkgBeg').value = c.pkg_beginner_price ?? 190;
   $('sPkgMock').value = c.pkg_mock_price ?? 95;
-  $('consTitle').textContent = c.name + ' — console';
+  $('sInstrMan').value = c.instructor_manual ?? 'George';
+  $('sInstrAuto').value = c.instructor_auto ?? 'Revi';
+  INSTR = { manual: $('sInstrMan').value, automatic: $('sInstrAuto').value };
+  CONS_NAME = c.name + ' — console';
+  paintScope();
   RATE = parseFloat($('sRate').value) || 44;
   RATE_AUTO = parseFloat($('sRateAuto').value) || 46;
 }
@@ -1601,6 +1688,8 @@ $('saveSettings').onclick = async () => {
     cancel_notice_hours: parseFloat($('sCancelNotice').value),
     late_cancel_fee: parseFloat($('sFee').value),
     horizon_days: parseInt($('sHorizon').value, 10),
+    instructor_manual: $('sInstrMan').value.trim() || 'George',
+    instructor_auto: $('sInstrAuto').value.trim() || 'Revi',
   };
   try {
     if (!DEMO) await api('/admin/settings', {
@@ -1608,7 +1697,9 @@ $('saveSettings').onclick = async () => {
       body: JSON.stringify({ config }),
     });
     ok($('sMsg'), 'Settings saved.');
-    $('consTitle').textContent = config.name + ' — console';
+    INSTR = { manual: config.instructor_manual, automatic: config.instructor_auto };
+    CONS_NAME = config.name + ' — console';
+    paintScope();
     RATE = config.hourly_rate || RATE;
     RATE_AUTO = config.hourly_rate_auto || RATE_AUTO;
   } catch (e) { err($('sMsg'), e.message); }
