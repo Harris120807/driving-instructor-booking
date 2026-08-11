@@ -126,6 +126,11 @@
     min-width: 200px;
   }
   .btn.danger { background: var(--bad); }
+  .gal { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .gal figure { margin: 0; }
+  .gal img { width: 100%; display: block; border-radius: 10px; aspect-ratio: 4 / 3; object-fit: cover;
+    border: 1px solid var(--border); background: var(--page); }
+  .gal figcaption { font-size: .85rem; color: var(--muted); margin-top: 4px; }
   .msg { margin-top: 12px; padding: 10px 14px; border-radius: 8px; display: none; }
   .msg.err { display: block; background: rgba(194,59,59,.12); color: var(--bad); }
   .msg.ok { display: block; background: var(--accent-soft); color: var(--good); }
@@ -195,6 +200,7 @@
     <img src="/logo.png" alt="" onerror="this.style.display='none'">
     <button class="navtab sel" data-view="home" type="button">Home</button>
     <button class="navtab" data-view="book" type="button">Book</button>
+    <button class="navtab" data-view="gallery" type="button">Gallery</button>
     <button class="accbtn" data-view="account" id="accBtn" type="button">Account</button>
   </nav>
 
@@ -347,6 +353,14 @@
 
   </div>
 
+  <div class="view" id="view-gallery">
+    <div class="card">
+      <h2>Gallery</h2>
+      <p class="muted" id="galEmpty" style="display:none">No photos yet — check back soon.</p>
+      <div class="gal" id="galGrid"></div>
+    </div>
+  </div>
+
   <div class="view" id="view-account">
   <div class="card" id="portalCard">
     <h2>My account</h2>
@@ -425,10 +439,11 @@ const $ = id => document.getElementById(id);
 let DEMO = false;
 
 // --- views (Home / Book / Account) ---
-const VIEWS = ['home', 'book', 'account'];
+const VIEWS = ['home', 'book', 'gallery', 'account'];
 function switchView(v) {
   if (!VIEWS.includes(v)) v = 'home';
   for (const x of VIEWS) $('view-' + x).classList.toggle('sel', x === v);
+  if (v === 'gallery') loadGallery();
   document.querySelectorAll('.navtab').forEach(b => b.classList.toggle('sel', b.dataset.view === v));
   if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
   window.scrollTo({ top: 0 });
@@ -436,6 +451,32 @@ function switchView(v) {
 document.querySelectorAll('[data-view]').forEach(b =>
   b.addEventListener('click', () => switchView(b.dataset.view)));
 window.addEventListener('hashchange', () => switchView(location.hash.slice(1)));
+
+let galLoaded = false;
+async function loadGallery() {
+  if (galLoaded) return;
+  galLoaded = true;
+  try {
+    const j = await api('/api/gallery');
+    const g = $('galGrid');
+    g.innerHTML = '';
+    if (!j.photos.length) { $('galEmpty').style.display = ''; return; }
+    for (const p of j.photos) {
+      const f = document.createElement('figure');
+      const img = document.createElement('img');
+      img.loading = 'lazy';
+      img.src = '/api/gallery/img/' + p.id;
+      img.alt = p.caption || 'Gallery photo';
+      f.appendChild(img);
+      if (p.caption) {
+        const c = document.createElement('figcaption');
+        c.textContent = p.caption;
+        f.appendChild(c);
+      }
+      g.appendChild(f);
+    }
+  } catch { $('galEmpty').style.display = ''; }
+}
 
 let CONFIG = {
   name: 'Driving Lessons', area: 'Local lessons with door-to-door pickup',
@@ -626,6 +667,7 @@ $('typeSeg').addEventListener('click', e => {
   state.type = b.dataset.type;
   for (const x of $('typeSeg').children) x.classList.toggle('sel', x === b);
   renderLen();
+  loadSlots(); // each instructor has their own diary, so availability changes too
   renderTimes(); // summary price/wording updates
 });
 
@@ -660,7 +702,7 @@ async function loadSlots() {
     state.slots = demoSlots();
   } else {
     try {
-      const j = await api(`/api/slots?from=${today}&to=${end.toISOString().slice(0, 10)}&duration=${state.duration}`);
+      const j = await api(`/api/slots?from=${today}&to=${end.toISOString().slice(0, 10)}&duration=${state.duration}&type=${state.type}`);
       state.slots = j.slots || {};
     } catch { state.slots = {}; }
   }
@@ -958,7 +1000,7 @@ async function startMove(l) {
   if (DEMO) moveSlots = demoSlots();
   else {
     try {
-      moveSlots = (await api(`/api/slots?from=${today}&to=${end.toISOString().slice(0, 10)}&duration=${l.duration_min}`)).slots || {};
+      moveSlots = (await api(`/api/slots?from=${today}&to=${end.toISOString().slice(0, 10)}&duration=${l.duration_min}&type=${l.lesson_type || 'manual'}`)).slots || {};
     } catch { moveSlots = {}; }
   }
   const dSel = $('mvDate'); dSel.innerHTML = '';

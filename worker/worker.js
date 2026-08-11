@@ -221,12 +221,16 @@ async function putSetting(env, key, obj) {
 
 // --- slot computation ------------------------------------------------------
 
-async function blockedDates(env, from, to) {
+// type: 'manual' | 'automatic' | null (null = dates blocked for anyone).
+// Overrides with NULL lesson_type (incl. all pre-2026-08-11 rows) block BOTH
+// instructors; typed ones block only their own diary.
+async function blockedDates(env, from, to, type = null) {
   const set = new Set();
   const { results } = await env.DB.prepare(
-    'SELECT start_date, end_date FROM overrides WHERE start_date <= ? AND end_date >= ?'
+    'SELECT start_date, end_date, lesson_type FROM overrides WHERE start_date <= ? AND end_date >= ?'
   ).bind(to, from).all();
   for (const r of results) {
+    if (type && r.lesson_type && r.lesson_type !== type) continue;
     const s = r.start_date < from ? from : r.start_date;
     const e = r.end_date > to ? to : r.end_date;
     for (let d = s; d <= e; d = addDays(d, 1)) set.add(d);
@@ -234,10 +238,25 @@ async function blockedDates(env, from, to) {
   return set;
 }
 
-// opts.noHorizon: used for recurring weeks beyond the public booking horizon
+// Each instructor has their own weekly hours: 'template' is the manual
+// (George) diary — also the pre-split shared one — and 'template_auto' is the
+// automatic (Revi) diary, falling back to the manual template until it's
+// edited so the split changes nothing by itself.
+async function templateFor(env, type) {
+  if (type === 'automatic') {
+    const t = await getSetting(env, 'template_auto', null);
+    if (t) return t;
+  }
+  return getSetting(env, 'template', DEFAULT_TEMPLATE);
+}
+
+// opts.noHorizon: used for recurring weeks beyond the public booking horizon.
+// opts.type ('manual' | 'automatic'): whose diary — the two instructors teach
+// in separate cars, so slots, time off and clashes are all per instructor.
 async function openSlots(env, from, to, durationMin, opts = {}) {
+  const type = opts.type === 'automatic' ? 'automatic' : 'manual';
   const config = await getSetting(env, 'config', DEFAULT_CONFIG);
-  const template = await getSetting(env, 'template', DEFAULT_TEMPLATE);
+  const template = await templateFor(env, type);
   const now = ukNowParts();
 
   if (from < now.date) from = now.date;
@@ -247,12 +266,13 @@ async function openSlots(env, from, to, durationMin, opts = {}) {
   }
   if (from > to) return {};
 
-  const blocked = await blockedDates(env, from, to);
+  const blocked = await blockedDates(env, from, to, type);
 
-  const busy = {}; // date -> [{start, end}] minutes
+  const busy = {}; // date -> [{start, end}] minutes — this instructor's lessons only
   for (const r of (await env.DB.prepare(
-    "SELECT date, time, duration_min FROM bookings WHERE date >= ? AND date <= ? AND status != 'cancelled'"
+    "SELECT date, time, duration_min, lesson_type FROM bookings WHERE date >= ? AND date <= ? AND status != 'cancelled'"
   ).bind(from, to).all()).results) {
+    if ((r.lesson_type === 'automatic') !== (type === 'automatic')) continue;
     (busy[r.date] ||= []).push({ start: toMin(r.time), end: toMin(r.time) + r.duration_min });
   }
 
@@ -552,6 +572,28 @@ export default {
         return json({ ok: true, package: pkg.label });
       }
 
+      // Public gallery: photo list + the images themselves (stored in D1;
+      // the console shrinks photos client-side before upload)
+      if (path === '/api/gallery' && req.method === 'GET') {
+        const rows = (await env.DB.prepare(
+          'SELECT id, caption, created_at FROM gallery ORDER BY created_at DESC, id DESC LIMIT 100'
+        ).all()).results;
+        return json({ photos: rows }, 200, { 'Cache-Control': 'public, max-age=60' });
+      }
+
+      if (path.startsWith('/api/gallery/img/') && req.method === 'GET') {
+        const imgId = parseInt(path.slice('/api/gallery/img/'.length), 10);
+        if (!Number.isInteger(imgId)) return json({ error: 'bad request' }, 400);
+        const row = await env.DB.prepare('SELECT mime, data FROM gallery WHERE id = ?').bind(imgId).first();
+        if (!row) return new Response('not found', { status: 404 });
+        const bin = Uint8Array.from(atob(row.data), c => c.charCodeAt(0));
+        return new Response(bin, { headers: {
+          'Content-Type': row.mime,
+          'Cache-Control': 'public, max-age=31536000, immutable',
+          'Access-Control-Allow-Origin': '*',
+        } });
+      }
+
       if (path === '/api/slots' && req.method === 'GET') {
         const from = url.searchParams.get('from');
         const to = url.searchParams.get('to');
@@ -563,7 +605,8 @@ export default {
         // the fixed motorway length is always queryable, even outside the range
         if ((dur < loS || dur > hiS) && dur !== motorwayMinutes(cfgS))
           return json({ error: 'bad params' }, 400);
-        return json({ slots: await openSlots(env, from, to, dur) }, 200,
+        const slotType = url.searchParams.get('type') === 'automatic' ? 'automatic' : 'manual';
+        return json({ slots: await openSlots(env, from, to, dur, { type: slotType }) }, 200,
           { 'Cache-Control': 'public, max-age=60' });
       }
 
@@ -618,7 +661,7 @@ export default {
           return json({ error: 'Invalid duration.' }, 400);
 
         // First lesson must be a genuinely open slot (notice + horizon enforced)
-        const open = await openSlots(env, date, date, duration);
+        const open = await openSlots(env, date, date, duration, { type: lessonType });
         if (!(open[date] || []).includes(time))
           return json({ error: 'That slot is no longer available — please pick another.' }, 409);
 
@@ -635,7 +678,7 @@ export default {
           const d = addDays(date, w * 7);
           if (w > 0) {
             // Later weeks: same checks minus the horizon (that's the point of recurring)
-            const openW = await openSlots(env, d, d, duration, { noHorizon: true });
+            const openW = await openSlots(env, d, d, duration, { noHorizon: true, type: lessonType });
             if (!(openW[d] || []).includes(time)) { skipped.push(d); continue; }
           }
           const ref = newRef();
@@ -749,7 +792,8 @@ export default {
           if (row.status === 'cancelled') return json({ error: 'That lesson is cancelled — book a new one instead.' }, 409);
           const now = ukNowParts();
           if (lessonPast(now, row)) return json({ error: 'That lesson has already taken place.' }, 409);
-          const open = await openSlots(env, nd, nd, row.duration_min);
+          const open = await openSlots(env, nd, nd, row.duration_min,
+            { type: row.lesson_type === 'automatic' ? 'automatic' : 'manual' });
           if (!(open[nd] || []).includes(nt))
             return json({ error: 'That new time is not available — pick another.' }, 409);
 
@@ -944,8 +988,9 @@ export default {
           for (let w = 0; w < repeatWeeks; w++) {
             const d = addDays(date, w * 7);
             const clash = (await env.DB.prepare(
-              "SELECT time, duration_min FROM bookings WHERE date = ? AND status != 'cancelled'"
+              "SELECT time, duration_min, lesson_type FROM bookings WHERE date = ? AND status != 'cancelled'"
             ).bind(d).all()).results.some(r =>
+              (r.lesson_type === 'automatic') === (abType === 'automatic') &&
               toMin(time) < toMin(r.time) + r.duration_min && toMin(time) + duration > toMin(r.time));
             if (clash) {
               if (w === 0) return json({ error: 'That time overlaps an existing lesson.' }, 409);
@@ -995,7 +1040,7 @@ export default {
           const bookings = (await env.DB.prepare(
             'SELECT * FROM bookings WHERE date >= ? AND date <= ? AND hidden = 0 ORDER BY date, time'
           ).bind(from, to).all()).results.filter(r => inScope(scope, r));
-          return json({ bookings, blocked: [...await blockedDates(env, from, to)] });
+          return json({ bookings, blocked: [...await blockedDates(env, from, to, scope)] });
         }
 
         if (path === '/admin/booking' && req.method === 'POST') {
@@ -1257,16 +1302,20 @@ export default {
         }
 
         if (path === '/admin/schedule' && req.method === 'GET') {
+          const type = scopeOf(url) || 'manual';
           return json({
-            template: await getSetting(env, 'template', DEFAULT_TEMPLATE),
+            type,
+            template: await templateFor(env, type),
             overrides: (await env.DB.prepare(
-              "SELECT * FROM overrides WHERE end_date >= date('now') ORDER BY start_date LIMIT 200").all()).results,
+              "SELECT * FROM overrides WHERE end_date >= date('now') ORDER BY start_date LIMIT 200").all())
+              .results.filter(o => !o.lesson_type || o.lesson_type === type),
           });
         }
 
         if (path === '/admin/schedule' && req.method === 'POST') {
           const b = await readBody(req);
           if (!b || typeof b.template !== 'object') return json({ error: 'bad request' }, 400);
+          const tplType = b.type === 'automatic' ? 'automatic' : 'manual';
           const clean = {};
           for (const k of DAY_KEYS) {
             const d = b.template[k];
@@ -1275,7 +1324,7 @@ export default {
               return json({ error: `bad hours for ${k}` }, 400);
             clean[k] = { start: d.start, end: d.end };
           }
-          await putSetting(env, 'template', clean);
+          await putSetting(env, tplType === 'automatic' ? 'template_auto' : 'template', clean);
           return json({ ok: true });
         }
 
@@ -1290,24 +1339,53 @@ export default {
           const start = b.start_date, end = b.end_date || b.start_date;
           if (!RE_DATE.test(start || '') || !RE_DATE.test(end || '') || end < start)
             return json({ error: 'bad dates' }, 400);
+          // Whose time off: 'manual' | 'automatic'; null = both instructors
+          const ovType = b.lesson_type === 'automatic' ? 'automatic'
+            : b.lesson_type === 'manual' ? 'manual' : null;
           await env.DB.prepare(
-            'INSERT INTO overrides (start_date, end_date, note) VALUES (?, ?, ?)'
-          ).bind(start, end, String(b.note || '').slice(0, 200)).run();
+            'INSERT INTO overrides (start_date, end_date, note, lesson_type) VALUES (?, ?, ?, ?)'
+          ).bind(start, end, String(b.note || '').slice(0, 200), ovType).run();
 
-          // Auto-cancel lessons inside the blocked window (no pupil fee) and
-          // report them so the instructor can tell the pupils
+          // Auto-cancel THAT instructor's lessons inside the blocked window
+          // (no pupil fee) and report them so the instructor can tell the pupils
           const hit = (await env.DB.prepare(
-            "SELECT id, ref, date, time, name, phone, email FROM bookings WHERE date >= ? AND date <= ? AND status != 'cancelled' ORDER BY date, time"
-          ).bind(start, end).all()).results;
+            "SELECT id, ref, date, time, name, phone, email, lesson_type FROM bookings WHERE date >= ? AND date <= ? AND status != 'cancelled' ORDER BY date, time"
+          ).bind(start, end).all()).results.filter(h =>
+            !ovType || (h.lesson_type === 'automatic') === (ovType === 'automatic'));
           if (hit.length) {
-            await env.DB.prepare(
-              "UPDATE bookings SET status = 'cancelled', cancelled_by = 'instructor', fee = 0 WHERE date >= ? AND date <= ? AND status != 'cancelled'"
-            ).bind(start, end).run();
+            for (const h of hit) await env.DB.prepare(
+              "UPDATE bookings SET status = 'cancelled', cancelled_by = 'instructor', fee = 0 WHERE id = ?"
+            ).bind(h.id).run();
             notify(env, ctx, `Time off blocked — ${hit.length} lesson(s) auto-cancelled`,
               hit.map(h => `${h.date} ${h.time} ${h.name} (${h.phone})`).join('\n'));
             await notifyCancelledPupils(env, ctx, hit, url.origin);
           }
           return json({ ok: true, cancelled: hit });
+        }
+
+        // Gallery uploads (either instructor). Client sends a shrunk JPEG as
+        // base64; hard caps keep every row well inside D1's row-size limit.
+        if (path === '/admin/gallery' && req.method === 'POST') {
+          const b = await readBody(req);
+          const mime = ['image/jpeg', 'image/png', 'image/webp'].includes(b?.mime) ? b.mime : null;
+          const data = typeof b?.data === 'string' ? b.data.replace(/\s/g, '') : '';
+          if (!mime || data.length < 100 || !/^[A-Za-z0-9+/=]+$/.test(data))
+            return json({ error: 'bad image' }, 400);
+          if (data.length > 1400000)
+            return json({ error: 'That photo is too large — please try a smaller one.' }, 400);
+          const { c } = await env.DB.prepare('SELECT COUNT(*) AS c FROM gallery').first();
+          if (c >= 60) return json({ error: 'The gallery is full (60 photos) — remove some first.' }, 409);
+          await env.DB.prepare(
+            'INSERT INTO gallery (caption, mime, data, created_at) VALUES (?, ?, ?, ?)'
+          ).bind(String(b.caption || '').slice(0, 200), mime, data, Math.floor(Date.now() / 1000)).run();
+          return json({ ok: true });
+        }
+
+        if (path === '/admin/gallery-delete' && req.method === 'POST') {
+          const b = await readBody(req);
+          if (!b || !Number.isInteger(b.id)) return json({ error: 'bad request' }, 400);
+          await env.DB.prepare('DELETE FROM gallery WHERE id = ?').bind(b.id).run();
+          return json({ ok: true });
         }
 
         if (path === '/admin/settings' && req.method === 'GET') {

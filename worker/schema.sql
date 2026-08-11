@@ -45,10 +45,13 @@ CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings(date, status);
 CREATE INDEX IF NOT EXISTS idx_bookings_email ON bookings(email);
 
 -- Blocked periods (holidays / days off) — inclusive date ranges
+-- Live migration 2026-08-11: ALTER TABLE overrides ADD COLUMN lesson_type TEXT;
+-- (lesson_type: 'manual' | 'automatic' | NULL = time off for BOTH instructors)
 CREATE TABLE IF NOT EXISTS overrides (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   start_date TEXT NOT NULL,                   -- YYYY-MM-DD
   end_date   TEXT NOT NULL,                   -- YYYY-MM-DD (>= start_date)
+  lesson_type TEXT,                       -- whose diary; NULL = both
   note       TEXT DEFAULT ''
 );
 
@@ -136,4 +139,15 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   token_hash TEXT PRIMARY KEY,
   email TEXT NOT NULL,
   expires INTEGER NOT NULL
+);
+
+-- Public gallery (2026-08-11): photos stored IN D1 as base64 (the console
+-- shrinks them client-side to ~1600px JPEG first; server caps ~1MB binary,
+-- 60 photos). Served via /api/gallery/img/{id} with immutable caching.
+CREATE TABLE IF NOT EXISTS gallery (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  caption    TEXT DEFAULT '',
+  mime       TEXT NOT NULL,
+  data       TEXT NOT NULL,                  -- base64 image bytes
+  created_at INTEGER NOT NULL
 );

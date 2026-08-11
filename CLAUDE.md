@@ -95,6 +95,24 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
   as `outstanding_manual`/`outstanding_automatic` (summary),
   `owed_manual`/`owed_automatic` on each student (scoped `owed` becomes that
   instructor's share), and `split` on student detail.
+- **Per-instructor diaries (2026-08-11)**: availability, time off and clash
+  checks are ALL per instructor (separate cars): `openSlots` takes
+  `opts.type`, busy/clash checks compare lesson_type buckets, `/api/slots`
+  takes `&type=` (the Book page refetches when the transmission toggles, and
+  Move passes the lesson's own type). Weekly hours: settings key `template`
+  = manual/George (also the pre-split shared one), `template_auto` =
+  automatic/Revi, falling back to `template` until first edited.
+  `overrides.lesson_type`: 'manual' | 'automatic' | NULL = blocks BOTH
+  (legacy rows). Blocking time off auto-cancels only that instructor's
+  lessons (per-id updates, not the old date-range UPDATE). The console
+  Availability tab edits the selected dashboard's diary; on Everything it
+  shows George/Revi chips. Settings tab is only visible on Everything.
+- **Gallery (2026-08-11)**: public `#gallery` nav tab + console Gallery tab
+  (both instructors). Photos stored IN D1 (`gallery` table, base64 TEXT) —
+  the console shrinks to ≤1600px JPEG q0.82 client-side before upload;
+  server caps ~1MB base64 and 60 photos (D1 row limit is 2MB — keep caps
+  under it). Served at `/api/gallery` (list, 60s cache) and
+  `/api/gallery/img/{id}` (immutable 1y cache — ids are never reused).
 - **Admin UI conventions**: weekly series collapse to one ↻ line in Bookings
   (expand for per-week actions; confirm-all/cancel-all loop client-side over
   `/admin/booking`); Calendar tab reloads on every tab click via

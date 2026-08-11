@@ -55,6 +55,11 @@
   .pp.yes { background: var(--accent-soft); color: var(--good); }
   .pp.no { background: rgba(194,59,59,.12); color: var(--bad); }
   .owed { color: var(--bad); font-weight: 700; }
+  .gal { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  .gal figure { margin: 0; }
+  .gal img { width: 100%; display: block; border-radius: 10px; aspect-ratio: 4 / 3; object-fit: cover;
+    border: 1px solid var(--border); }
+  .gal figcaption { font-size: .82rem; color: var(--muted); margin: 4px 0; min-height: 1em; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
   .dayrow { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
@@ -212,6 +217,7 @@
       <button class="tab" data-pane="calendar">Calendar</button>
       <button class="tab" data-pane="students">Students</button>
       <button class="tab" data-pane="schedule">Availability</button>
+      <button class="tab" data-pane="gallery">Gallery</button>
       <button class="tab" data-pane="settings">Settings</button>
     </div>
 
@@ -401,6 +407,11 @@
     </div>
 
     <div class="pane" id="pane-schedule">
+      <div class="filters" id="avSel" style="margin-bottom:10px">
+        <button class="chip" data-av="manual" id="avChipMan">George</button>
+        <button class="chip" data-av="automatic" id="avChipAuto">Revi</button>
+      </div>
+      <p class="muted" id="avWho" style="margin:0 0 10px"></p>
       <div class="grid">
         <div class="card">
           <h2>Weekly hours</h2>
@@ -423,6 +434,23 @@
           <div id="ovList" class="muted">Loading…</div>
           <div class="msg" id="oMsg"></div>
         </div>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-gallery">
+      <div class="card">
+        <h2>Add a photo</h2>
+        <p class="muted">Photos appear on the site's public <b>Gallery</b> tab. Big photos are
+          shrunk automatically before upload, so pictures straight off your phone are fine.</p>
+        <div class="field"><label for="gFile">Photo</label><input type="file" id="gFile" accept="image/*"></div>
+        <div class="field"><label for="gCaption">Caption (optional)</label>
+          <input id="gCaption" maxlength="200" style="width:100%" placeholder="e.g. Another first-time pass!"></div>
+        <button class="btn sm" id="gUpload">Upload to gallery</button>
+        <div class="msg" id="gMsg"></div>
+      </div>
+      <div class="card">
+        <h2>Current gallery</h2>
+        <div class="gal" id="gGrid"><span class="muted">Loading…</span></div>
       </div>
     </div>
 
@@ -642,6 +670,11 @@ function paintScope() {
   $('chipAuto').textContent = INSTR.automatic + ' · automatic';
   const who = SCOPE === 'manual' ? INSTR.manual : SCOPE === 'automatic' ? INSTR.automatic : null;
   $('consTitle').textContent = who ? who + "'s dashboard" : (CONS_NAME || 'Instructor console');
+  // Settings is a whole-business tab — only on the Everything view
+  const sTab = document.querySelector('.tab[data-pane="settings"]');
+  sTab.style.display = SCOPE === 'all' ? '' : 'none';
+  if (SCOPE !== 'all' && sTab.classList.contains('sel'))
+    document.querySelector('.tab[data-pane="bookings"]').click();
 }
 let CONS_NAME = '';
 $('dashSel').addEventListener('click', e => {
@@ -653,7 +686,7 @@ $('dashSel').addEventListener('click', e => {
   // Pre-select the matching transmission on the Add-booking form
   if (SCOPE !== 'all')
     document.querySelector(`[data-abtype="${SCOPE === 'automatic' ? 'automatic' : 'manual'}"]`)?.click();
-  loadBookings(); loadStudents(); loadCalendar();
+  loadBookings(); loadStudents(); loadCalendar(); loadSchedule();
 });
 
 // Tabs — pane list driven entirely by data-pane attributes
@@ -662,6 +695,7 @@ document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   document.querySelectorAll('.pane').forEach(p =>
     p.classList.toggle('sel', p.id === 'pane-' + t.dataset.pane));
   if (t.dataset.pane === 'calendar') loadCalendar(); // always fresh
+  if (t.dataset.pane === 'gallery') loadGalleryAdmin();
 });
 
 // --- demo fixtures ---
@@ -1567,11 +1601,33 @@ let TEMPLATE = {
   thu:{start:'09:00',end:'18:00'}, fri:{start:'09:00',end:'18:00'}, sat:{start:'09:00',end:'13:00'}, sun:null,
 };
 
+// The Availability tab edits ONE instructor's diary: the selected dashboard's
+// instructor, or (on the Everything view) whichever chip is picked here.
+let AV_SEL = 'manual';
+const avScope = () => SCOPE === 'all' ? AV_SEL : SCOPE;
+function paintAv() {
+  $('avSel').style.display = SCOPE === 'all' ? '' : 'none';
+  $('avChipMan').textContent = INSTR.manual;
+  $('avChipAuto').textContent = INSTR.automatic;
+  document.querySelectorAll('#avSel .chip').forEach(c =>
+    c.classList.toggle('sel', c.dataset.av === avScope()));
+  const who = avScope() === 'automatic' ? INSTR.automatic : INSTR.manual;
+  $('avWho').textContent = `Editing ${who}'s diary (${avScope()} lessons). ` +
+    'Hours and time off here only affect their lessons.';
+}
+$('avSel').addEventListener('click', e => {
+  const c = e.target.closest('.chip[data-av]');
+  if (!c) return;
+  AV_SEL = c.dataset.av;
+  loadSchedule();
+});
+
 async function loadSchedule() {
+  paintAv();
   let overrides = [];
   if (!DEMO) {
     try {
-      const j = await api('/admin/schedule');
+      const j = await api('/admin/schedule?type=' + avScope());
       TEMPLATE = j.template; overrides = j.overrides;
     } catch (e) { err($('tMsg'), e.message); }
   }
@@ -1607,10 +1663,10 @@ $('saveTemplate').onclick = async () => {
   try {
     if (!DEMO) await api('/admin/schedule', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ template: t }),
+      body: JSON.stringify({ template: t, type: avScope() }),
     });
     TEMPLATE = t;
-    ok($('tMsg'), 'Weekly hours saved.');
+    ok($('tMsg'), `Weekly hours saved for ${avScope() === 'automatic' ? INSTR.automatic : INSTR.manual}.`);
   } catch (e) { err($('tMsg'), e.message); }
 };
 
@@ -1623,7 +1679,8 @@ function renderOverrides(list) {
     row.className = 'ovrow';
     const span = o.start_date === o.end_date ? fmtWhen(o.start_date)
       : `${fmtWhen(o.start_date)} → ${fmtWhen(o.end_date)}`;
-    row.innerHTML = `<span style="flex:1">${span}${o.note ? ` — <span class="muted">${esc(o.note)}</span>` : ''}</span>`;
+    const whoTag = o.lesson_type ? '' : ' <span class="muted">(both instructors)</span>';
+    row.innerHTML = `<span style="flex:1">${span}${whoTag}${o.note ? ` — <span class="muted">${esc(o.note)}</span>` : ''}</span>`;
     const rm = document.createElement('button');
     rm.className = 'btn ghost sm'; rm.textContent = 'Reopen';
     rm.onclick = async () => {
@@ -1650,7 +1707,8 @@ $('addOv').onclick = async () => {
     if (!DEMO) {
       cancelled = (await api('/admin/override', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start_date: start, end_date: end, note: $('ovNote').value.trim() }),
+        body: JSON.stringify({ start_date: start, end_date: end, note: $('ovNote').value.trim(),
+          lesson_type: avScope() }),
       })).cancelled;
     }
     if (cancelled.length) {
@@ -1663,6 +1721,69 @@ $('addOv').onclick = async () => {
     $('ovNote').value = ''; $('ovEnd').value = '';
     loadSchedule(); loadBookings(); loadStudents();
   } catch (e) { err($('oMsg'), e.message); }
+};
+
+// --- gallery (both instructors can add and remove) ---
+async function loadGalleryAdmin() {
+  const g = $('gGrid');
+  if (DEMO) { g.innerHTML = '<span class="muted">No photos yet.</span>'; return; }
+  let j;
+  try { j = await api('/api/gallery?cb=' + Date.now()); }
+  catch (e) { g.textContent = e.message; return; }
+  g.innerHTML = j.photos.length ? '' : '<span class="muted">No photos yet.</span>';
+  for (const p of j.photos) {
+    const f = document.createElement('figure');
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.src = '/api/gallery/img/' + p.id;
+    img.alt = p.caption || '';
+    const cap = document.createElement('figcaption');
+    cap.textContent = p.caption || '';
+    const rm = document.createElement('button');
+    rm.className = 'btn ghost sm';
+    rm.textContent = 'Remove';
+    rm.onclick = async () => {
+      if (!confirm('Remove this photo from the public gallery?')) return;
+      try {
+        await api('/admin/gallery-delete', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: p.id }) });
+        loadGalleryAdmin();
+      } catch (e) { err($('gMsg'), e.message); }
+    };
+    f.append(img, cap, rm);
+    g.appendChild(f);
+  }
+}
+
+$('gUpload').onclick = async () => {
+  const file = $('gFile').files[0];
+  if (!file) { err($('gMsg'), 'Choose a photo first.'); return; }
+  $('gUpload').disabled = true;
+  try {
+    // Shrink client-side (max 1600px JPEG) so phone photos fit the database
+    const bmp = await createImageBitmap(file).catch(() => {
+      throw new Error('That file type could not be read — try a JPEG or PNG photo.');
+    });
+    const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
+    const blob = await new Promise(res => cv.toBlob(res, 'image/jpeg', 0.82));
+    const b64 = await new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result).split(',')[1]);
+      fr.onerror = rej;
+      fr.readAsDataURL(blob);
+    });
+    if (DEMO) throw new Error('Preview mode — no backend to store photos.');
+    await api('/admin/gallery', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caption: $('gCaption').value.trim(), mime: 'image/jpeg', data: b64 }) });
+    ok($('gMsg'), 'Photo added to the public gallery.');
+    $('gFile').value = ''; $('gCaption').value = '';
+    loadGalleryAdmin();
+  } catch (e) { err($('gMsg'), e.message); }
+  $('gUpload').disabled = false;
 };
 
 // --- settings ---
