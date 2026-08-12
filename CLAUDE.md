@@ -144,3 +144,9 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
   cap via settings 'canaryAlert' {at}) + the same generic 401 as any wrong
   login. Excluded from the /dev pupil count. Don't "clean up" the canary
   user row, and never send test canary alerts (real ntfy topic).
+  Dev-only account deletion (2026-08-12): `/dev/admin-delete` (admins row +
+  sessions; the shared key still allows re-registration — rotate it for a
+  real lock-out) and `/dev/user-delete` (pupil LOGIN only — users+sessions;
+  bookings/charges/students records deliberately kept, they're the money
+  history; canary refuses deletion). secLog kinds admin_delete (email) /
+  user_delete (no PII).

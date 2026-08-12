@@ -1051,6 +1051,36 @@ export default {
           });
         }
 
+        // Revoke an instructor's console account entirely (row + sessions).
+        // The shared admin key still exists — they could re-register with it,
+        // so rotating the key is the companion step for a real lock-out.
+        if (path === '/dev/admin-delete' && req.method === 'POST') {
+          const b = await readBody(req);
+          const email = String(b?.email || '').trim().toLowerCase();
+          if (!RE_EMAIL.test(email)) return json({ error: 'bad request' }, 400);
+          await env.DB.prepare('DELETE FROM admins WHERE email = ?').bind(email).run();
+          await env.DB.prepare('DELETE FROM admin_sessions WHERE email = ?').bind(email).run();
+          secLog(env, ctx, 'admin_delete', email);
+          return json({ ok: true });
+        }
+
+        // Delete a pupil's LOGIN account (users row + sessions). Bookings,
+        // charges and the student record stay — they are the business's
+        // money history; the pupil can re-register with any booking ref.
+        if (path === '/dev/user-delete' && req.method === 'POST') {
+          const b = await readBody(req);
+          const email = String(b?.email || '').trim().toLowerCase();
+          if (!RE_EMAIL.test(email)) return json({ error: 'bad request' }, 400);
+          if (email === (await getSetting(env, 'canary', { email: null })).email)
+            return json({ error: 'That is the canary tripwire account — it stays.' }, 400);
+          const u = await env.DB.prepare('SELECT email FROM users WHERE email = ?').bind(email).first();
+          if (!u) return json({ error: 'No login account exists for that email.' }, 404);
+          await env.DB.prepare('DELETE FROM users WHERE email = ?').bind(email).run();
+          await env.DB.prepare('DELETE FROM sessions WHERE email = ?').bind(email).run();
+          secLog(env, ctx, 'user_delete', '');
+          return json({ ok: true });
+        }
+
         if (path === '/dev/errors' && req.method === 'GET') {
           const dayAgo = Math.floor(Date.now() / 1000) - 86400;
           return json({

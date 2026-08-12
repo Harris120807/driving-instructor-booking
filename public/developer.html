@@ -84,7 +84,7 @@
         <h2>Students (all, by owed)</h2>
         <div class="scroll"><table id="stuTable">
           <thead><tr><th>Name</th><th>Email</th><th>Lessons</th><th class="num">Owed</th>
-            <th class="num">· manual</th><th class="num">· automatic</th><th class="num">Credit</th><th>Status</th></tr></thead>
+            <th class="num">· manual</th><th class="num">· automatic</th><th class="num">Credit</th><th>Status</th><th></th></tr></thead>
           <tbody></tbody>
         </table></div>
       </div>
@@ -139,7 +139,7 @@
         <h2>Instructor accounts</h2>
         <p class="muted">Console sign-ins created with the admin key. Sessions = devices currently signed in.</p>
         <div class="scroll"><table id="admTable">
-          <thead><tr><th>Email</th><th>Created</th><th>Last sign-in</th><th class="num">Sessions</th></tr></thead>
+          <thead><tr><th>Email</th><th>Created</th><th>Last sign-in</th><th class="num">Sessions</th><th></th></tr></thead>
           <tbody></tbody>
         </table></div>
       </div>
@@ -152,8 +152,11 @@
 const $ = id => document.getElementById(id);
 let KEY = localStorage.getItem('di-dev-key') || '';
 
-async function api(path) {
-  const r = await fetch(path, { headers: { Authorization: 'Bearer ' + KEY } });
+async function api(path, body) {
+  const r = await fetch(path, body
+    ? { method: 'POST', headers: { Authorization: 'Bearer ' + KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body) }
+    : { headers: { Authorization: 'Bearer ' + KEY } });
   if (r.status === 401) { signOut(); throw new Error('unauthorized'); }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || 'request failed');
@@ -214,12 +217,30 @@ async function enter() {
     kpi(summary.pending, 'Pending requests', summary.pending > 0 ? 'warn' : '') +
     kpi(sec.pupils, 'Pupil accounts');
 
-  $('stuTable').tBodies[0].innerHTML = students.students.map(s =>
-    `<tr><td>${esc(s.name)}</td><td>${esc(s.email)}</td><td>${s.lessons}</td>` +
-    `<td class="num">${s.owed > 0 ? '<b>' + money(s.owed) + '</b>' : money(0)}</td>` +
-    `<td class="num">${money(s.owed_manual || 0)}</td><td class="num">${money(s.owed_automatic || 0)}</td>` +
-    `<td class="num">${money(s.credit)}</td><td>${s.passed ? 'passed' : 'active'}</td></tr>`).join('')
-    || '<tr><td colspan="8" class="muted">No pupils yet.</td></tr>';
+  const stuBody = $('stuTable').tBodies[0];
+  stuBody.innerHTML = '';
+  for (const s of students.students) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${esc(s.name)}</td><td>${esc(s.email)}</td><td>${s.lessons}</td>` +
+      `<td class="num">${s.owed > 0 ? '<b>' + money(s.owed) + '</b>' : money(0)}</td>` +
+      `<td class="num">${money(s.owed_manual || 0)}</td><td class="num">${money(s.owed_automatic || 0)}</td>` +
+      `<td class="num">${money(s.credit)}</td><td>${s.passed ? 'passed' : 'active'}</td>`;
+    const td = document.createElement('td');
+    const rm = document.createElement('button');
+    rm.className = 'btn'; rm.style.cssText = 'padding:4px 12px; font-size:.8rem; background:var(--bad)';
+    rm.textContent = 'Delete login';
+    rm.onclick = async () => {
+      if (!confirm(`Delete ${s.name}'s login account? Their bookings, owed money and history all ` +
+        'stay — this only removes their sign-in. They can re-register with any booking reference.')) return;
+      try { await api('/dev/user-delete', { email: s.email }); enter(); }
+      catch (e) { alert(e.message); }
+    };
+    td.appendChild(rm);
+    tr.appendChild(td);
+    stuBody.appendChild(tr);
+  }
+  if (!students.students.length) stuBody.innerHTML =
+    '<tr><td colspan="9" class="muted">No pupils yet.</td></tr>';
 
   $('bkTable').tBodies[0].innerHTML = bookings.bookings.slice(-100).reverse().map(b =>
     `<tr><td>${b.date}</td><td>${b.time}</td><td>${esc(b.name)}</td>` +
@@ -265,10 +286,29 @@ async function enter() {
     `<td class="num"><b>${money(tot.collected_manual)}</b></td><td class="num"><b>${money(tot.collected_automatic)}</b></td>` +
     `<td class="num"><b>${money(tot.fees_collected)}</b></td><td class="num"><b>${money(tot.packages_collected)}</b></td></tr>`);
 
-  $('admTable').tBodies[0].innerHTML = sec.admins.map(a =>
-    `<tr><td>${esc(a.email)}</td><td>${when(a.created_at)}</td>` +
-    `<td>${when(a.last_login)}</td><td class="num">${a.sessions}</td></tr>`).join('')
-    || '<tr><td colspan="4" class="muted">No instructor accounts yet — they’re created on first sign-in at /admin.</td></tr>';
+  const admBody = $('admTable').tBodies[0];
+  admBody.innerHTML = '';
+  for (const a of sec.admins) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${esc(a.email)}</td><td>${when(a.created_at)}</td>` +
+      `<td>${when(a.last_login)}</td><td class="num">${a.sessions}</td>`;
+    const td = document.createElement('td');
+    const rm = document.createElement('button');
+    rm.className = 'btn'; rm.style.cssText = 'padding:4px 12px; font-size:.8rem; background:var(--bad)';
+    rm.textContent = 'Delete';
+    rm.onclick = async () => {
+      if (!confirm(`Delete the instructor account ${a.email}? They are signed out everywhere ` +
+        'immediately. Note: they could re-create an account with the admin key — rotate the key ' +
+        'too if this is a real lock-out.')) return;
+      try { await api('/dev/admin-delete', { email: a.email }); enter(); }
+      catch (e) { alert(e.message); }
+    };
+    td.appendChild(rm);
+    tr.appendChild(td);
+    admBody.appendChild(tr);
+  }
+  if (!sec.admins.length) admBody.innerHTML =
+    '<tr><td colspan="5" class="muted">No instructor accounts yet — they’re created on first sign-in at /admin.</td></tr>';
 }
 
 if (KEY) { enter().catch(signOut); }
