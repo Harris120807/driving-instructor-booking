@@ -118,3 +118,19 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
   (expand for per-week actions; confirm-all/cancel-all loop client-side over
   `/admin/booking`); Calendar tab reloads on every tab click via
   `/admin/calendar?from&to` (≤62 days, returns bookings + blocked dates).
+- **Developer console (2026-08-12, owner-only)**: `/developer`
+  (public/developer.html) — linked from NOWHERE, meta-noindex'd, deliberately
+  NOT listed in robots.txt (a Disallow line would advertise the path). Gated
+  by Worker secret `DEV_KEY` (owner-held, separate from the instructor
+  ADMIN_KEY; stored in the session scratchpad dev-key.txt). DEV_KEY also
+  passes the /admin/* gate (superset) but ADMIN_KEY does NOT open /dev/*.
+  Routes: `/dev/earnings` (monthly ledger computed live from bookings+charges
+  — booked, collected, manual/auto/fees/packages splits), `/dev/security`
+  (last 30 security_log rows + 24h failure counts + pupil/session counts +
+  admin-account list), `/dev/errors` (error_log 24h count + last 30).
+  ValueTally-style logging: `secLog`/`errLog` are best-effort (waitUntil +
+  try/catch — a broken log path must never break serving); security_log
+  kinds: admin_auth_fail, admin_login, admin_register, dev_auth_fail,
+  login_fail, signup, password_reset. detail = route names/generic text
+  only, never credentials or pupil PII. Every 401 on /admin/* and /dev/*
+  logs an event.

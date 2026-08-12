@@ -151,3 +151,21 @@ CREATE TABLE IF NOT EXISTS gallery (
   data       TEXT NOT NULL,                  -- base64 image bytes
   created_at INTEGER NOT NULL
 );
+
+-- Developer console (2026-08-12, owner-only /developer page):
+-- security events + worker errors, both written best-effort (a broken log
+-- path must never break serving). detail carries route names/generic text
+-- only — never passwords, tokens or pupil PII.
+CREATE TABLE IF NOT EXISTS security_log (
+  id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  at     INTEGER NOT NULL,                   -- epoch seconds
+  kind   TEXT NOT NULL,                      -- admin_auth_fail | admin_login | admin_register |
+                                             -- dev_auth_fail | login_fail | signup
+  detail TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS error_log (
+  id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  at     INTEGER NOT NULL,
+  route  TEXT NOT NULL,
+  detail TEXT DEFAULT ''
+);

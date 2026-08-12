@@ -151,6 +151,32 @@ async function isAdmin(req, env) {
   return !!row && row.expires >= Math.floor(Date.now() / 1000);
 }
 
+// Developer key (owner-held, separate from the instructor ADMIN_KEY) —
+// unlocks /dev/* AND counts as admin so the developer console can read
+// everything the instructor console can.
+async function isDev(req, env) {
+  const key = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+  if (!key || !env.DEV_KEY) return false;
+  return (await sha256Hex(key)) === (await sha256Hex(env.DEV_KEY));
+}
+
+// Best-effort logging — a broken log path must NEVER break serving.
+// detail is route names / generic text only, never credentials or pupil PII.
+function secLog(env, ctx, kind, detail) {
+  try {
+    ctx.waitUntil(env.DB.prepare('INSERT INTO security_log (at, kind, detail) VALUES (?, ?, ?)')
+      .bind(Math.floor(Date.now() / 1000), kind, String(detail || '').slice(0, 200)).run()
+      .catch(() => {}));
+  } catch {}
+}
+function errLog(env, ctx, route, detail) {
+  try {
+    ctx.waitUntil(env.DB.prepare('INSERT INTO error_log (at, route, detail) VALUES (?, ?, ?)')
+      .bind(Math.floor(Date.now() / 1000), String(route).slice(0, 100), String(detail || '').slice(0, 500)).run()
+      .catch(() => {}));
+  } catch {}
+}
+
 async function newAdminSession(env, email) {
   const token = randomHex(32);
   await env.DB.prepare('INSERT INTO admin_sessions (token_hash, email, expires) VALUES (?, ?, ?)')
@@ -722,8 +748,10 @@ export default {
 
         if (path === '/auth/login') {
           const u = await env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-          if (!u || (await pbkdf2Hex(password, u.salt)) !== u.pw_hash)
+          if (!u || (await pbkdf2Hex(password, u.salt)) !== u.pw_hash) {
+            secLog(env, ctx, 'login_fail', '');
             return json({ error: 'Wrong email or password.' }, 401);
+          }
           return json({ ok: true, token: await newSession(env, email) });
         }
 
@@ -742,7 +770,9 @@ export default {
           if (existing) return json({ error: 'An account already exists for this email — sign in instead.' }, 409);
           await env.DB.prepare('INSERT INTO users (email, pw_hash, salt, created_at) VALUES (?, ?, ?, ?)')
             .bind(email, hash, salt, Math.floor(Date.now() / 1000)).run();
+          secLog(env, ctx, 'signup', '');
         } else { // reset: replace password, sign out everywhere
+          secLog(env, ctx, 'password_reset', '');
           const existing = await env.DB.prepare('SELECT email FROM users WHERE email = ?').bind(email).first();
           if (!existing) return json({ error: 'No account for this email — create one instead.' }, 404);
           await env.DB.prepare('UPDATE users SET pw_hash = ?, salt = ? WHERE email = ?')
@@ -868,8 +898,10 @@ export default {
           if (password.length < 8)
             return json({ error: 'Password must be at least 8 characters.' }, 400);
           const key = String(b?.key || '');
-          if (!key || !env.ADMIN_KEY || (await sha256Hex(key)) !== (await sha256Hex(env.ADMIN_KEY)))
+          if (!key || !env.ADMIN_KEY || (await sha256Hex(key)) !== (await sha256Hex(env.ADMIN_KEY))) {
+            secLog(env, ctx, 'admin_auth_fail', 'register (wrong key)');
             return json({ error: 'Admin key not accepted.' }, 401);
+          }
           const name = String(b?.name || '').trim().slice(0, 40);
           const salt = randomHex(16);
           const hash = await pbkdf2Hex(password, salt);
@@ -879,12 +911,16 @@ export default {
                name = CASE WHEN excluded.name != '' THEN excluded.name ELSE admins.name END`
           ).bind(email, name, hash, salt, Math.floor(Date.now() / 1000)).run();
           await env.DB.prepare('DELETE FROM admin_sessions WHERE email = ?').bind(email).run();
+          secLog(env, ctx, 'admin_register', email);
           return json({ token: await newAdminSession(env, email), email });
         }
 
         const a = await env.DB.prepare('SELECT * FROM admins WHERE email = ?').bind(email).first();
-        if (!a || (await pbkdf2Hex(password, a.salt)) !== a.pw_hash)
+        if (!a || (await pbkdf2Hex(password, a.salt)) !== a.pw_hash) {
+          secLog(env, ctx, 'admin_auth_fail', 'login');
           return json({ error: 'Wrong email or password.' }, 401);
+        }
+        secLog(env, ctx, 'admin_login', email);
         return json({ token: await newAdminSession(env, email), email, name: a.name || '' });
       }
 
@@ -896,9 +932,87 @@ export default {
         return json({ ok: true });
       }
 
+      // ---- developer (owner-only; separate DEV_KEY) ----
+      if (path.startsWith('/dev/')) {
+        if (!(await isDev(req, env))) {
+          secLog(env, ctx, 'dev_auth_fail', path);
+          return json({ error: 'unauthorized' }, 401);
+        }
+
+        // Monthly earnings ledger, computed live from the full booking and
+        // charge history (bookings are never deleted, so this IS the record)
+        if (path === '/dev/earnings' && req.method === 'GET') {
+          const rows = (await env.DB.prepare('SELECT * FROM bookings').all()).results;
+          const charges = (await env.DB.prepare('SELECT * FROM charges').all()).results;
+          const months = new Map();
+          const M = m => {
+            if (!months.has(m)) months.set(m, { month: m, lessons: 0, booked: 0, collected: 0,
+              fees_collected: 0, packages_collected: 0, collected_manual: 0, collected_automatic: 0 });
+            return months.get(m);
+          };
+          for (const r of rows) {
+            const m = M(r.date.slice(0, 7));
+            const bucket = r.lesson_type === 'automatic' ? 'collected_automatic' : 'collected_manual';
+            if (r.status !== 'cancelled') {
+              m.lessons++;
+              m.booked += r.price;
+              if (r.paid) { m.collected += r.price; m[bucket] += r.price; }
+            } else if (r.fee > 0 && r.paid) {
+              m.collected += r.fee; m.fees_collected += r.fee; m[bucket] += r.fee;
+            }
+          }
+          for (const ch of charges) {
+            if (!ch.paid) continue;
+            const d = new Date(ch.created_at * 1000).toLocaleDateString('en-CA',
+              { timeZone: 'Europe/London' }).slice(0, 7);
+            const m = M(d);
+            const bucket = ch.lesson_type === 'automatic' ? 'collected_automatic' : 'collected_manual';
+            m.collected += ch.amount; m.packages_collected += ch.amount; m[bucket] += ch.amount;
+          }
+          return json({ months: [...months.values()].sort((a, b) => b.month.localeCompare(a.month)) });
+        }
+
+        if (path === '/dev/security' && req.method === 'GET') {
+          const dayAgo = Math.floor(Date.now() / 1000) - 86400;
+          const recent = (await env.DB.prepare(
+            'SELECT * FROM security_log ORDER BY id DESC LIMIT 30').all()).results;
+          const count = async (sql, ...args) =>
+            (await env.DB.prepare(sql).bind(...args).first())?.c || 0;
+          return json({
+            recent,
+            failed_admin_24h: await count(
+              "SELECT COUNT(*) AS c FROM security_log WHERE kind IN ('admin_auth_fail','dev_auth_fail') AND at > ?", dayAgo),
+            failed_login_24h: await count(
+              "SELECT COUNT(*) AS c FROM security_log WHERE kind = 'login_fail' AND at > ?", dayAgo),
+            pupils: await count('SELECT COUNT(*) AS c FROM users'),
+            sessions: await count('SELECT COUNT(*) AS c FROM sessions WHERE expires > ?', Math.floor(Date.now() / 1000)),
+            admins: (await env.DB.prepare('SELECT email, created_at FROM admins').all()).results,
+          });
+        }
+
+        if (path === '/dev/errors' && req.method === 'GET') {
+          const dayAgo = Math.floor(Date.now() / 1000) - 86400;
+          return json({
+            count_24h: (await env.DB.prepare(
+              'SELECT COUNT(*) AS c FROM error_log WHERE at > ?').bind(dayAgo).first())?.c || 0,
+            recent: (await env.DB.prepare(
+              'SELECT * FROM error_log ORDER BY id DESC LIMIT 30').all()).results,
+          });
+        }
+
+        return json({ error: 'not found' }, 404);
+      }
+
       // ---- admin ----
       if (path.startsWith('/admin/')) {
-        if (!(await isAdmin(req, env))) return json({ error: 'unauthorized' }, 401);
+        if (!(await isAdmin(req, env))) {
+          // the owner's DEV_KEY unlocks the admin API too (the developer
+          // console reads everything the instructor console can)
+          if (!(await isDev(req, env))) {
+            secLog(env, ctx, 'admin_auth_fail', path);
+            return json({ error: 'unauthorized' }, 401);
+          }
+        }
 
         // Console KPIs: booked/collected money + outstanding + pending count.
         // ?type=manual|automatic scopes the money/pending to one instructor's
@@ -1437,6 +1551,7 @@ export default {
 
       return json({ error: 'not found' }, 404);
     } catch (e) {
+      errLog(env, ctx, path, String(e && e.message || e));
       return json({ error: 'server error' }, 500);
     }
   },
