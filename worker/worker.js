@@ -177,6 +177,37 @@ function errLog(env, ctx, route, detail) {
   } catch {}
 }
 
+// Canary tripwire (ValueTally pattern): a decoy pupil account whose
+// credentials exist NOWHERE — any attempt to log into it, sign it up or
+// reset it means someone is using leaked database contents. Detection only:
+// the request gets the normal generic 401, it is never blocked differently.
+// NOTE: getSetting object-spreads stored values, so canary state is stored
+// as objects ({email}, {at}) — never as bare strings/numbers.
+async function canaryEmailOf(env) {
+  const c = await getSetting(env, 'canary', null);
+  if (c && c.email) return c.email;
+  const em = `canary.${randomHex(6)}@ridewaepride.com`;
+  await env.DB.prepare('INSERT INTO users (email, pw_hash, salt, created_at) VALUES (?, ?, ?, ?)')
+    .bind(em, randomHex(32), randomHex(16), Math.floor(Date.now() / 1000)).run();
+  await putSetting(env, 'canary', { email: em });
+  return em;
+}
+
+async function canaryTripped(env, ctx, what) {
+  secLog(env, ctx, 'canary_login', what);
+  try {
+    // one push per 30 min at most (the log keeps every event)
+    const last = (await getSetting(env, 'canaryAlert', { at: 0 })).at || 0;
+    const now = Math.floor(Date.now() / 1000);
+    if (now - last >= 1800) {
+      await putSetting(env, 'canaryAlert', { at: now });
+      notify(env, ctx, 'SECURITY ALERT — decoy account touched',
+        'Someone tried to use the canary account. Its details exist only inside the ' +
+        'database, so this means leaked data. Check ridewaepride.com/developer.');
+    }
+  } catch {}
+}
+
 async function newAdminSession(env, email) {
   const token = randomHex(32);
   await env.DB.prepare('INSERT INTO admin_sessions (token_hash, email, expires) VALUES (?, ?, ?)')
@@ -746,6 +777,13 @@ export default {
         const password = String(b?.password || '');
         if (!RE_EMAIL.test(email)) return json({ error: 'Please give a valid email.' }, 400);
 
+        // Canary: any auth attempt against the decoy account trips the alarm
+        // but is answered exactly like any wrong login (no tell)
+        if (email === (await getSetting(env, 'canary', { email: null })).email) {
+          await canaryTripped(env, ctx, path);
+          return json({ error: 'Wrong email or password.' }, 401);
+        }
+
         if (path === '/auth/login') {
           const u = await env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
           if (!u || (await pbkdf2Hex(password, u.salt)) !== u.pw_hash) {
@@ -973,20 +1011,43 @@ export default {
         }
 
         if (path === '/dev/security' && req.method === 'GET') {
-          const dayAgo = Math.floor(Date.now() / 1000) - 86400;
+          const nowSec = Math.floor(Date.now() / 1000);
+          const dayAgo = nowSec - 86400;
+          const canary = await canaryEmailOf(env); // self-bootstraps the decoy row
           const recent = (await env.DB.prepare(
             'SELECT * FROM security_log ORDER BY id DESC LIMIT 30').all()).results;
           const count = async (sql, ...args) =>
             (await env.DB.prepare(sql).bind(...args).first())?.c || 0;
+          // canary_ok = decoy row present, never touched, no sessions on it
+          const canaryRow = await env.DB.prepare('SELECT email FROM users WHERE email = ?')
+            .bind(canary).first();
+          const canaryHits = await count(
+            "SELECT COUNT(*) AS c FROM security_log WHERE kind = 'canary_login'");
+          const canarySessions = await count(
+            'SELECT COUNT(*) AS c FROM sessions WHERE email = ?', canary);
+          // instructor accounts with live-session + last-sign-in detail
+          const admins = [];
+          for (const a of (await env.DB.prepare('SELECT email, created_at FROM admins').all()).results) {
+            admins.push({
+              email: a.email, created_at: a.created_at,
+              sessions: await count(
+                'SELECT COUNT(*) AS c FROM admin_sessions WHERE email = ? AND expires > ?', a.email, nowSec),
+              last_login: (await env.DB.prepare(
+                "SELECT MAX(at) AS m FROM security_log WHERE kind IN ('admin_login','admin_register') AND detail = ?"
+              ).bind(a.email).first())?.m || null,
+            });
+          }
           return json({
             recent,
             failed_admin_24h: await count(
               "SELECT COUNT(*) AS c FROM security_log WHERE kind IN ('admin_auth_fail','dev_auth_fail') AND at > ?", dayAgo),
             failed_login_24h: await count(
               "SELECT COUNT(*) AS c FROM security_log WHERE kind = 'login_fail' AND at > ?", dayAgo),
-            pupils: await count('SELECT COUNT(*) AS c FROM users'),
-            sessions: await count('SELECT COUNT(*) AS c FROM sessions WHERE expires > ?', Math.floor(Date.now() / 1000)),
-            admins: (await env.DB.prepare('SELECT email, created_at FROM admins').all()).results,
+            pupils: (await count('SELECT COUNT(*) AS c FROM users')) - (canaryRow ? 1 : 0),
+            sessions: await count('SELECT COUNT(*) AS c FROM sessions WHERE expires > ?', nowSec),
+            admins,
+            canary_ok: !!canaryRow && canaryHits === 0 && canarySessions === 0,
+            canary_hits: canaryHits,
           });
         }
 

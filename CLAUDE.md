@@ -131,6 +131,16 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
   ValueTally-style logging: `secLog`/`errLog` are best-effort (waitUntil +
   try/catch — a broken log path must never break serving); security_log
   kinds: admin_auth_fail, admin_login, admin_register, dev_auth_fail,
-  login_fail, signup, password_reset. detail = route names/generic text
-  only, never credentials or pupil PII. Every 401 on /admin/* and /dev/*
-  logs an event.
+  login_fail, signup, password_reset, canary_login. detail = route
+  names/generic text only, never credentials or pupil PII. Every 401 on
+  /admin/* and /dev/* logs an event. Page is THREE tabs (2026-08-12): Site
+  details / Security / Earnings & accounts (instructor-accounts table with
+  created/last-sign-in/session counts rides /dev/security `admins`).
+  **Canary tripwire**: decoy pupil row `canary.<hex>@ridewaepride.com`
+  (random hash/salt, credentials exist nowhere), self-bootstrapped by
+  /dev/security; email kept in settings key 'canary' AS AN OBJECT {email} —
+  getSetting object-spreads values, so scalar settings get mangled (bug hit
+  once); any /auth/* attempt on it → canary_login log + ntfy (30-min flood
+  cap via settings 'canaryAlert' {at}) + the same generic 401 as any wrong
+  login. Excluded from the /dev pupil count. Don't "clean up" the canary
+  user row, and never send test canary alerts (real ntfy topic).

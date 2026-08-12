@@ -11,10 +11,11 @@
     color-scheme: light dark;
     --accent: #1a7a4a; --page: #f7f9f8; --card: #fff; --text: #14201a;
     --muted: #5c6b62; --border: rgba(20,32,26,.12); --bad: #c23b3b; --warn: #b07d10;
+    --good: #1a7a4a; --accent-soft: #e6f4ec;
   }
   @media (prefers-color-scheme: dark) {
     :root { --accent: #3fae77; --page: #0d1411; --card: #16201a; --text: #e8f0eb;
-      --muted: #93a59a; --border: rgba(232,240,235,.14); }
+      --muted: #93a59a; --border: rgba(232,240,235,.14); --good: #3fae77; --accent-soft: #12291d; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--page); color: var(--text);
@@ -24,12 +25,19 @@
   h2 { font-size: 1.05rem; margin: 0 0 10px; }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
     padding: 16px; margin-bottom: 14px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+  .tab { border: 1.5px solid var(--border); background: var(--card); color: var(--text);
+    font: inherit; font-weight: 600; padding: 8px 18px; border-radius: 999px; cursor: pointer; }
+  .tab.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .pane { display: none; }
+  .pane.sel { display: block; }
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
   .kpi { border: 1.5px solid var(--border); border-radius: 10px; padding: 10px 12px; }
   .kpi .v { font-size: 1.25rem; font-weight: 700; }
   .kpi .l { font-size: .78rem; color: var(--muted); }
   .kpi.warn .v { color: var(--warn); }
   .kpi.bad .v { color: var(--bad); }
+  .kpi.good .v { color: var(--good); }
   table { width: 100%; border-collapse: collapse; font-size: .86rem; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th { color: var(--muted); font-weight: 600; font-size: .78rem; }
@@ -42,8 +50,6 @@
   .msg { margin-top: 10px; color: var(--bad); display: none; }
   #console { display: none; }
   .scroll { overflow-x: auto; }
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -62,31 +68,50 @@
   <div id="console">
     <h1>Developer console <button class="btn" id="signOut" style="float:right; padding:6px 14px; font-size:.85rem">Sign out</button></h1>
 
-    <div class="card">
-      <h2>Business now</h2>
-      <div class="kpis" id="nowKpis"></div>
+    <div class="tabs">
+      <button class="tab sel" data-pane="site">Site details</button>
+      <button class="tab" data-pane="security">Security</button>
+      <button class="tab" data-pane="earnings">Earnings &amp; accounts</button>
     </div>
 
-    <div class="card">
-      <h2>Monthly earnings</h2>
-      <p class="muted">Computed live from the full booking + charge history. Collected = paid lessons,
-        late fees and package charges in that month; booked = all non-cancelled lesson value.</p>
-      <div class="scroll"><table id="earnTable">
-        <thead><tr><th>Month</th><th class="num">Lessons</th><th class="num">Booked</th>
-          <th class="num">Collected</th><th class="num">· manual</th><th class="num">· automatic</th>
-          <th class="num">· fees</th><th class="num">· packages</th></tr></thead>
-        <tbody></tbody>
-      </table></div>
+    <!-- ============ SITE DETAILS ============ -->
+    <div class="pane sel" id="pane-site">
+      <div class="card">
+        <h2>Business now</h2>
+        <div class="kpis" id="nowKpis"></div>
+      </div>
+      <div class="card">
+        <h2>Students (all, by owed)</h2>
+        <div class="scroll"><table id="stuTable">
+          <thead><tr><th>Name</th><th>Email</th><th>Lessons</th><th class="num">Owed</th>
+            <th class="num">· manual</th><th class="num">· automatic</th><th class="num">Credit</th><th>Status</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <h2>Recent bookings</h2>
+        <div class="scroll"><table id="bkTable">
+          <thead><tr><th>Date</th><th>Time</th><th>Pupil</th><th>Type</th><th class="num">£</th>
+            <th>Status</th><th>Paid</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <h2>Package requests</h2>
+        <div id="pkgList" class="muted">—</div>
+      </div>
     </div>
 
-    <div class="grid2">
+    <!-- ============ SECURITY ============ -->
+    <div class="pane" id="pane-security">
       <div class="card">
         <h2>Security</h2>
         <div class="kpis" id="secKpis" style="margin-bottom:10px"></div>
+        <p class="muted">The canary is a decoy pupil account whose details exist only inside the
+          database — any attempt to use it means leaked data, and sends a phone alert.</p>
         <div class="scroll"><table id="secTable">
           <thead><tr><th>When</th><th>Event</th><th>Detail</th></tr></thead><tbody></tbody>
         </table></div>
-        <p class="muted" id="adminList"></p>
       </div>
       <div class="card">
         <h2>Worker errors</h2>
@@ -97,27 +122,27 @@
       </div>
     </div>
 
-    <div class="card">
-      <h2>Students (all, by owed)</h2>
-      <div class="scroll"><table id="stuTable">
-        <thead><tr><th>Name</th><th>Email</th><th>Lessons</th><th class="num">Owed</th>
-          <th class="num">· manual</th><th class="num">· automatic</th><th class="num">Credit</th><th>Status</th></tr></thead>
-        <tbody></tbody>
-      </table></div>
-    </div>
-
-    <div class="card">
-      <h2>Recent bookings</h2>
-      <div class="scroll"><table id="bkTable">
-        <thead><tr><th>Date</th><th>Time</th><th>Pupil</th><th>Type</th><th class="num">£</th>
-          <th>Status</th><th>Paid</th></tr></thead>
-        <tbody></tbody>
-      </table></div>
-    </div>
-
-    <div class="card">
-      <h2>Package requests</h2>
-      <div id="pkgList" class="muted">—</div>
+    <!-- ============ EARNINGS & ACCOUNTS ============ -->
+    <div class="pane" id="pane-earnings">
+      <div class="card">
+        <h2>Monthly earnings</h2>
+        <p class="muted">Computed live from the full booking + charge history. Collected = paid lessons,
+          late fees and package charges in that month; booked = all non-cancelled lesson value.</p>
+        <div class="scroll"><table id="earnTable">
+          <thead><tr><th>Month</th><th class="num">Lessons</th><th class="num">Booked</th>
+            <th class="num">Collected</th><th class="num">· manual</th><th class="num">· automatic</th>
+            <th class="num">· fees</th><th class="num">· packages</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <h2>Instructor accounts</h2>
+        <p class="muted">Console sign-ins created with the admin key. Sessions = devices currently signed in.</p>
+        <div class="scroll"><table id="admTable">
+          <thead><tr><th>Email</th><th>Created</th><th>Last sign-in</th><th class="num">Sessions</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
     </div>
   </div>
 </div>
@@ -137,8 +162,14 @@ async function api(path) {
 const esc = s => String(s ?? '').replace(/[&<>"']/g,
   c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 const money = v => '£' + (Number.isInteger(v) ? v : (+v).toFixed(2));
-const when = at => new Date(at * 1000).toLocaleString('en-GB',
-  { timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const when = at => at ? new Date(at * 1000).toLocaleString('en-GB',
+  { timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('sel', x === t));
+  document.querySelectorAll('.pane').forEach(p =>
+    p.classList.toggle('sel', p.id === 'pane-' + t.dataset.pane));
+});
 
 function signOut() {
   KEY = '';
@@ -152,7 +183,7 @@ $('loginForm').addEventListener('submit', async e => {
   e.preventDefault();
   KEY = $('keyInput').value.trim();
   try {
-    await api('/dev/security');
+    await api('/dev/errors');
     localStorage.setItem('di-dev-key', KEY);
     enter();
   } catch {
@@ -174,7 +205,7 @@ async function enter() {
     api('/admin/bookings'), api('/admin/packages'),
   ]);
 
-  const thisMonth = earn.months[0] || { booked: 0, collected: 0 };
+  // --- site details ---
   $('nowKpis').innerHTML =
     kpi(money(summary.week_booked), 'Booked this week') +
     kpi(money(summary.month_booked), 'Booked this month') +
@@ -182,37 +213,6 @@ async function enter() {
     kpi(money(summary.outstanding), 'Outstanding', summary.outstanding > 0 ? 'warn' : '') +
     kpi(summary.pending, 'Pending requests', summary.pending > 0 ? 'warn' : '') +
     kpi(sec.pupils, 'Pupil accounts');
-
-  const tb = $('earnTable').tBodies[0];
-  tb.innerHTML = '';
-  const tot = { lessons: 0, booked: 0, collected: 0, collected_manual: 0,
-    collected_automatic: 0, fees_collected: 0, packages_collected: 0 };
-  for (const m of earn.months) {
-    for (const k in tot) tot[k] += m[k] || 0;
-    tb.insertAdjacentHTML('beforeend', `<tr><td>${m.month}</td><td class="num">${m.lessons}</td>` +
-      `<td class="num">${money(m.booked)}</td><td class="num"><b>${money(m.collected)}</b></td>` +
-      `<td class="num">${money(m.collected_manual)}</td><td class="num">${money(m.collected_automatic)}</td>` +
-      `<td class="num">${money(m.fees_collected)}</td><td class="num">${money(m.packages_collected)}</td></tr>`);
-  }
-  tb.insertAdjacentHTML('beforeend', `<tr><td><b>Total</b></td><td class="num"><b>${tot.lessons}</b></td>` +
-    `<td class="num"><b>${money(tot.booked)}</b></td><td class="num"><b>${money(tot.collected)}</b></td>` +
-    `<td class="num"><b>${money(tot.collected_manual)}</b></td><td class="num"><b>${money(tot.collected_automatic)}</b></td>` +
-    `<td class="num"><b>${money(tot.fees_collected)}</b></td><td class="num"><b>${money(tot.packages_collected)}</b></td></tr>`);
-
-  $('secKpis').innerHTML =
-    kpi(sec.failed_admin_24h, 'Failed admin/dev auths (24h)', sec.failed_admin_24h >= 10 ? 'bad' : '') +
-    kpi(sec.failed_login_24h, 'Failed pupil logins (24h)', sec.failed_login_24h >= 50 ? 'bad' : '') +
-    kpi(sec.sessions, 'Active pupil sessions');
-  $('secTable').tBodies[0].innerHTML = sec.recent.map(r =>
-    `<tr><td>${when(r.at)}</td><td>${esc(r.kind)}</td><td>${esc(r.detail)}</td></tr>`).join('')
-    || '<tr><td colspan="3" class="muted">No events yet.</td></tr>';
-  $('adminList').textContent = 'Instructor accounts: ' +
-    (sec.admins.length ? sec.admins.map(a => a.email).join(', ') : 'none yet');
-
-  $('errKpis').innerHTML = kpi(errs.count_24h, 'Errors (24h)', errs.count_24h > 0 ? 'bad' : '');
-  $('errTable').tBodies[0].innerHTML = errs.recent.map(r =>
-    `<tr><td>${when(r.at)}</td><td>${esc(r.route)}</td><td>${esc(r.detail)}</td></tr>`).join('')
-    || '<tr><td colspan="3" class="muted">No errors logged.</td></tr>';
 
   $('stuTable').tBodies[0].innerHTML = students.students.map(s =>
     `<tr><td>${esc(s.name)}</td><td>${esc(s.email)}</td><td>${s.lessons}</td>` +
@@ -231,6 +231,44 @@ async function enter() {
     ? pkgs.requests.map(r => `${esc(r.package)} · ${esc(r.lesson_type || 'manual')} — ` +
         `${esc(r.name)} (${esc(r.status)})`).join('<br>')
     : 'No package requests.';
+
+  // --- security ---
+  $('secKpis').innerHTML =
+    kpi(sec.canary_ok ? '✓ intact' : '⚠ TRIPPED', 'Canary tripwire', sec.canary_ok ? 'good' : 'bad') +
+    kpi(sec.failed_admin_24h, 'Failed admin/dev auths (24h)', sec.failed_admin_24h >= 10 ? 'bad' : '') +
+    kpi(sec.failed_login_24h, 'Failed pupil logins (24h)', sec.failed_login_24h >= 50 ? 'bad' : '') +
+    kpi(sec.sessions, 'Active pupil sessions');
+  $('secTable').tBodies[0].innerHTML = sec.recent.map(r =>
+    `<tr><td>${when(r.at)}</td><td>${r.kind === 'canary_login'
+      ? '<b style="color:var(--bad)">canary_login</b>' : esc(r.kind)}</td><td>${esc(r.detail)}</td></tr>`).join('')
+    || '<tr><td colspan="3" class="muted">No events yet.</td></tr>';
+
+  $('errKpis').innerHTML = kpi(errs.count_24h, 'Errors (24h)', errs.count_24h > 0 ? 'bad' : '');
+  $('errTable').tBodies[0].innerHTML = errs.recent.map(r =>
+    `<tr><td>${when(r.at)}</td><td>${esc(r.route)}</td><td>${esc(r.detail)}</td></tr>`).join('')
+    || '<tr><td colspan="3" class="muted">No errors logged.</td></tr>';
+
+  // --- earnings & accounts ---
+  const tb = $('earnTable').tBodies[0];
+  tb.innerHTML = '';
+  const tot = { lessons: 0, booked: 0, collected: 0, collected_manual: 0,
+    collected_automatic: 0, fees_collected: 0, packages_collected: 0 };
+  for (const m of earn.months) {
+    for (const k in tot) tot[k] += m[k] || 0;
+    tb.insertAdjacentHTML('beforeend', `<tr><td>${m.month}</td><td class="num">${m.lessons}</td>` +
+      `<td class="num">${money(m.booked)}</td><td class="num"><b>${money(m.collected)}</b></td>` +
+      `<td class="num">${money(m.collected_manual)}</td><td class="num">${money(m.collected_automatic)}</td>` +
+      `<td class="num">${money(m.fees_collected)}</td><td class="num">${money(m.packages_collected)}</td></tr>`);
+  }
+  tb.insertAdjacentHTML('beforeend', `<tr><td><b>Total</b></td><td class="num"><b>${tot.lessons}</b></td>` +
+    `<td class="num"><b>${money(tot.booked)}</b></td><td class="num"><b>${money(tot.collected)}</b></td>` +
+    `<td class="num"><b>${money(tot.collected_manual)}</b></td><td class="num"><b>${money(tot.collected_automatic)}</b></td>` +
+    `<td class="num"><b>${money(tot.fees_collected)}</b></td><td class="num"><b>${money(tot.packages_collected)}</b></td></tr>`);
+
+  $('admTable').tBodies[0].innerHTML = sec.admins.map(a =>
+    `<tr><td>${esc(a.email)}</td><td>${when(a.created_at)}</td>` +
+    `<td>${when(a.last_login)}</td><td class="num">${a.sessions}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">No instructor accounts yet — they’re created on first sign-in at /admin.</td></tr>';
 }
 
 if (KEY) { enter().catch(signOut); }
