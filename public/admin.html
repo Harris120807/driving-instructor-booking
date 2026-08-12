@@ -206,12 +206,6 @@
       <button class="btn ghost sm" id="signOut">Sign out</button>
     </div>
 
-    <div class="filters" id="dashSel" style="margin-bottom:10px">
-      <button class="chip" data-scope="manual" id="chipMan">George · manual</button>
-      <button class="chip" data-scope="automatic" id="chipAuto">Revi · automatic</button>
-      <button class="chip sel" data-scope="all">Everything</button>
-    </div>
-
     <div class="tabs" id="tabs">
       <button class="tab sel" data-pane="bookings">Bookings<span id="pendBadge" class="pbadge" style="display:none"></span></button>
       <button class="tab" data-pane="calendar">Calendar</button>
@@ -539,11 +533,11 @@ let AUTH = null;
 try { AUTH = JSON.parse(localStorage.getItem('di-admin-auth') || 'null'); } catch {}
 let KEY = AUTH?.token || sessionStorage.getItem('di-admin-key') || '';
 
-// Dashboard scope: George = manual, Revi = automatic, all = joint view.
-// Names come from Settings; 'manual'/'automatic' is what the server filters on.
-let SCOPE = localStorage.getItem('di-admin-scope') || 'all';
+// One joint console view (the per-instructor dashboards were removed
+// 2026-08-12, owner request). INSTR names still label the per-instructor
+// availability chips and the owed-money breakdown — they're paid separately.
 let INSTR = { manual: 'George', automatic: 'Revi' };
-const scopeQ = sep => SCOPE === 'all' ? '' : sep + 'type=' + SCOPE;
+const scopeQ = () => '';
 
 async function api(path, opts = {}) {
   opts.headers = { ...(opts.headers || {}), Authorization: 'Bearer ' + KEY };
@@ -617,14 +611,12 @@ async function loadSummary() {
   $('kWeek').textContent = fmtMoney(s.week_booked);
   $('kMonth').textContent = fmtMoney(s.month_booked);
   $('kCollected').textContent = fmtMoney(s.month_collected);
-  // Outstanding is per instructor — they're paid separately. The joint view
-  // shows the total plus how it breaks down.
+  // The instructors are paid separately, so the joint total still shows
+  // how it breaks down between them
   $('kOutstanding').textContent = fmtMoney(s.outstanding);
-  $('kOutLabel').innerHTML = SCOPE === 'all'
-    ? 'Outstanding · all' + (s.outstanding_manual != null
-      ? `<br><span style="font-size:.78rem">${esc(INSTR.manual)} ${fmtMoney(s.outstanding_manual)} · ` +
-        `${esc(INSTR.automatic)} ${fmtMoney(s.outstanding_automatic)}</span>` : '')
-    : `Owed to ${esc(INSTR[SCOPE] || '')}`;
+  $('kOutLabel').innerHTML = 'Outstanding (all pupils)' + (s.outstanding_manual || s.outstanding_automatic
+    ? `<br><span style="font-size:.78rem">${esc(INSTR.manual)} ${fmtMoney(s.outstanding_manual)} · ` +
+      `${esc(INSTR.automatic)} ${fmtMoney(s.outstanding_automatic)}</span>` : '');
   const b = $('pendBadge');
   b.style.display = s.pending ? '' : 'none';
   b.textContent = s.pending;
@@ -662,32 +654,10 @@ $('loginForm').addEventListener('submit', async e => {
 });
 $('signOut').onclick = signOut;
 
-// --- dashboard switcher (George / Revi / Everything) ---
 function paintScope() {
-  document.querySelectorAll('#dashSel .chip').forEach(c =>
-    c.classList.toggle('sel', c.dataset.scope === SCOPE));
-  $('chipMan').textContent = INSTR.manual + ' · manual';
-  $('chipAuto').textContent = INSTR.automatic + ' · automatic';
-  const who = SCOPE === 'manual' ? INSTR.manual : SCOPE === 'automatic' ? INSTR.automatic : null;
-  $('consTitle').textContent = who ? who + "'s dashboard" : (CONS_NAME || 'Instructor console');
-  // Settings is a whole-business tab — only on the Everything view
-  const sTab = document.querySelector('.tab[data-pane="settings"]');
-  sTab.style.display = SCOPE === 'all' ? '' : 'none';
-  if (SCOPE !== 'all' && sTab.classList.contains('sel'))
-    document.querySelector('.tab[data-pane="bookings"]').click();
+  $('consTitle').textContent = CONS_NAME || 'Instructor console';
 }
 let CONS_NAME = '';
-$('dashSel').addEventListener('click', e => {
-  const c = e.target.closest('.chip[data-scope]');
-  if (!c || c.dataset.scope === SCOPE) return;
-  SCOPE = c.dataset.scope;
-  localStorage.setItem('di-admin-scope', SCOPE);
-  paintScope();
-  // Pre-select the matching transmission on the Add-booking form
-  if (SCOPE !== 'all')
-    document.querySelector(`[data-abtype="${SCOPE === 'automatic' ? 'automatic' : 'manual'}"]`)?.click();
-  loadBookings(); loadStudents(); loadCalendar(); loadSchedule();
-});
 
 // Tabs — pane list driven entirely by data-pane attributes
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
@@ -1083,8 +1053,8 @@ async function loadStudents() {
       `<td>${fmtMoney(s.credit)}${s.credit_min ? `<br><span class="muted">${fmtH(s.credit_min)} time</span>` : ''}` +
         `${s.credit_mock ? `<br><span class="muted">${s.credit_mock}× mock</span>` : ''}</td>` +
       `<td>${s.owed > 0 ? `<span class="owed">${fmtMoney(s.owed)}</span>` : fmtMoney(0)}` +
-        // joint view: show who the money is owed to, since they're paid separately
-        `${SCOPE === 'all' && s.owed > 0 && s.owed_manual != null && s.owed_automatic > 0 && s.owed_manual > 0
+        // show who the money is owed to, since they're paid separately
+        `${s.owed > 0 && s.owed_manual != null && s.owed_automatic > 0 && s.owed_manual > 0
           ? `<br><span class="muted">${esc(INSTR.manual)} ${fmtMoney(s.owed_manual)} · ` +
             `${esc(INSTR.automatic)} ${fmtMoney(s.owed_automatic)}</span>` : ''}</td>` +
       `<td>${testCell(s.test_date)}</td>`;
@@ -1601,12 +1571,11 @@ let TEMPLATE = {
   thu:{start:'09:00',end:'18:00'}, fri:{start:'09:00',end:'18:00'}, sat:{start:'09:00',end:'13:00'}, sun:null,
 };
 
-// The Availability tab edits ONE instructor's diary: the selected dashboard's
-// instructor, or (on the Everything view) whichever chip is picked here.
+// The Availability tab edits ONE instructor's diary at a time — they teach
+// in separate cars, so each has their own hours and time off.
 let AV_SEL = 'manual';
-const avScope = () => SCOPE === 'all' ? AV_SEL : SCOPE;
+const avScope = () => AV_SEL;
 function paintAv() {
-  $('avSel').style.display = SCOPE === 'all' ? '' : 'none';
   $('avChipMan').textContent = INSTR.manual;
   $('avChipAuto').textContent = INSTR.automatic;
   document.querySelectorAll('#avSel .chip').forEach(c =>

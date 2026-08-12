@@ -79,12 +79,13 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
   the shared ADMIN_KEY in the same form — re-register with the key = password
   reset (kills that account's sessions). The RAW key alone still works as a
   bearer token everywhere (recovery + API compat) — email left blank on the
-  form. Console has a three-chip dashboard switcher: manual lessons =
-  `instructor_manual`'s dash (George), automatic = `instructor_auto`'s
-  (Revi), Everything = joint; names editable in Settings. Scoping = `?type=`
-  on /admin/summary, bookings, calendar, students, packages; legacy rows
-  with NULL lesson_type count as manual. Students in a scoped view are
-  pupils with ≥1 lesson of that type.
+  form. **The per-instructor dashboard switcher was REMOVED 2026-08-12
+  (owner request)** — the console is one joint view again. The server-side
+  `?type=` scoping on /admin/summary, bookings, calendar, students, packages
+  REMAINS (the UI just never sends it, except /admin/schedule which the
+  Availability tab's George/Revi chips still use); legacy rows with NULL
+  lesson_type count as manual. `instructor_manual`/`instructor_auto` names
+  still label the availability chips + owed breakdowns.
 - **Owed money is SPLIT per instructor (2026-08-11)** — they are paid
   separately. `splitOwed()` in worker.js: each lesson's owed goes to that
   lesson's type, package charges carry `charges.lesson_type` (set from the
@@ -105,8 +106,8 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
   `overrides.lesson_type`: 'manual' | 'automatic' | NULL = blocks BOTH
   (legacy rows). Blocking time off auto-cancels only that instructor's
   lessons (per-id updates, not the old date-range UPDATE). The console
-  Availability tab edits the selected dashboard's diary; on Everything it
-  shows George/Revi chips. Settings tab is only visible on Everything.
+  Availability tab has its own always-visible George/Revi chips (the diaries
+  stayed split when the dashboards were removed — separate cars).
 - **Gallery (2026-08-11)**: public `#gallery` nav tab + console Gallery tab
   (both instructors). Photos stored IN D1 (`gallery` table, base64 TEXT) —
   the console shrinks to ≤1600px JPEG q0.82 client-side before upload;
