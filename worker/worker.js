@@ -504,6 +504,15 @@ const publicLesson = b => ({
 
 export default {
   async fetch(req, env, ctx) {
+    {
+      // Canonical host: www duplicates the site, so 301 it to the apex (SEO)
+      const u = new URL(req.url);
+      if (u.hostname === 'www.ridewaepride.com')
+        return Response.redirect('https://ridewaepride.com' + u.pathname + u.search, 301);
+      // "/" is routed through the Worker (run_worker_first) purely for the
+      // redirect above — hand it straight back to the static assets
+      if (u.pathname === '/' && env.ASSETS) return env.ASSETS.fetch(req);
+    }
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url = new URL(req.url);
     const path = url.pathname;
