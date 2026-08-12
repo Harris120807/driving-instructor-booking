@@ -169,3 +169,19 @@ CREATE TABLE IF NOT EXISTS error_log (
   route  TEXT NOT NULL,
   detail TEXT DEFAULT ''
 );
+
+-- Admin action audit trail (2026-08-12): who did what in the console.
+-- actor = admin account email, 'admin key' or 'developer'.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  at     INTEGER NOT NULL,
+  actor  TEXT NOT NULL,
+  action TEXT NOT NULL,
+  detail TEXT DEFAULT ''
+);
+
+-- Anonymous page-view counter (2026-08-12): one row per UK day, no IPs/UAs.
+CREATE TABLE IF NOT EXISTS traffic (
+  day   TEXT PRIMARY KEY,                    -- YYYY-MM-DD (Europe/London)
+  views INTEGER NOT NULL DEFAULT 0
+);

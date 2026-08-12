@@ -144,6 +144,20 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
   cap via settings 'canaryAlert' {at}) + the same generic 401 as any wrong
   login. Excluded from the /dev pupil count. Don't "clean up" the canary
   user row, and never send test canary alerts (real ntfy topic).
+  **Dev-dash analytics batch (2026-08-12)**: `audit_log` table — the /admin
+  gate resolves `actor` (account email / 'admin key' / 'developer') via
+  `adminActor()`, and EVERY mutating admin route calls `audit()` (same
+  best-effort rule as secLog); served at /dev/audit, rendered on the
+  Security tab. `traffic` table — one row per UK day, incremented on GET /
+  (runs through the Worker via run_worker_first; other assets are NOT
+  counted — it's homepage views only, bots included, no IPs/UAs);
+  /dev/traffic joins bookings-created-per-day for conversion. /dev/pipeline
+  = upcoming confirmed/pending £ + next-28-day per-instructor utilisation
+  (booked min ÷ template-minus-time-off availability). /dev/pupils = new
+  pupils by first-booking month, avg lessons, and the gone-quiet list
+  (past lessons, nothing future, 30+ days silent, not passed/archived).
+  /dev/ops = table row counts + gallery cap + live config snapshot.
+  Charts are dependency-free inline SVG (`bars()` in developer.html).
   Dev-only account deletion (2026-08-12): `/dev/admin-delete` (admins row +
   sessions; the shared key still allows re-registration — rotate it for a
   real lock-out) and `/dev/user-delete` (pupil LOGIN only — users+sessions;

@@ -169,6 +169,30 @@ function secLog(env, ctx, kind, detail) {
       .catch(() => {}));
   } catch {}
 }
+// Who is acting on an /admin route: an admin account email, the raw shared
+// key ('admin key'), or the owner's dev key ('developer'); null = not allowed
+async function adminActor(req, env) {
+  const key = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+  if (!key) return null;
+  if (env.ADMIN_KEY && (await sha256Hex(key)) === (await sha256Hex(env.ADMIN_KEY))) return 'admin key';
+  if (env.DEV_KEY && (await sha256Hex(key)) === (await sha256Hex(env.DEV_KEY))) return 'developer';
+  if (/^[0-9a-f]{64}$/.test(key)) {
+    const row = await env.DB.prepare('SELECT email, expires FROM admin_sessions WHERE token_hash = ?')
+      .bind(await sha256Hex(key)).first();
+    if (row && row.expires >= Math.floor(Date.now() / 1000)) return row.email;
+  }
+  return null;
+}
+
+// Console action audit — same best-effort rule as secLog
+function audit(env, ctx, actor, action, detail) {
+  try {
+    ctx.waitUntil(env.DB.prepare('INSERT INTO audit_log (at, actor, action, detail) VALUES (?, ?, ?, ?)')
+      .bind(Math.floor(Date.now() / 1000), actor, action, String(detail || '').slice(0, 300)).run()
+      .catch(() => {}));
+  } catch {}
+}
+
 function errLog(env, ctx, route, detail) {
   try {
     ctx.waitUntil(env.DB.prepare('INSERT INTO error_log (at, route, detail) VALUES (?, ?, ?)')
@@ -566,8 +590,16 @@ export default {
       const u = new URL(req.url);
       if (u.hostname === 'www.ridewaepride.com')
         return Response.redirect('https://ridewaepride.com' + u.pathname + u.search, 301);
-      // "/" is routed through the Worker (run_worker_first) purely for the
-      // redirect above — hand it straight back to the static assets
+      // "/" is routed through the Worker (run_worker_first) for the redirect
+      // above — count the page view (anonymous: one number per UK day, no
+      // IPs or user agents) and hand back to the static assets
+      if (u.pathname === '/' && req.method === 'GET') {
+        try {
+          ctx.waitUntil(env.DB.prepare(
+            'INSERT INTO traffic (day, views) VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET views = views + 1'
+          ).bind(ukNowParts().date).run().catch(() => {}));
+        } catch {}
+      }
       if (u.pathname === '/' && env.ASSETS) return env.ASSETS.fetch(req);
     }
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
@@ -1081,6 +1113,108 @@ export default {
           return json({ ok: true });
         }
 
+        if (path === '/dev/audit' && req.method === 'GET') {
+          return json({ audit: (await env.DB.prepare(
+            'SELECT * FROM audit_log ORDER BY id DESC LIMIT 100').all()).results });
+        }
+
+        // Anonymous daily page views + bookings created that day (conversion)
+        if (path === '/dev/traffic' && req.method === 'GET') {
+          const days = (await env.DB.prepare(
+            'SELECT day, views FROM traffic ORDER BY day DESC LIMIT 30').all()).results;
+          const byDay = new Map(days.map(d => [d.day, { ...d, bookings: 0 }]));
+          for (const r of (await env.DB.prepare('SELECT created_at FROM bookings').all()).results) {
+            const d = new Date(r.created_at * 1000).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+            if (byDay.has(d)) byDay.get(d).bookings++;
+          }
+          return json({ days: [...byDay.values()] });
+        }
+
+        // Money already in the diary + how full each instructor's next 4 weeks are
+        if (path === '/dev/pipeline' && req.method === 'GET') {
+          const now = ukNowParts();
+          const horizon = addDays(now.date, 27);
+          const rows = (await env.DB.prepare(
+            "SELECT * FROM bookings WHERE status != 'cancelled'").all()).results;
+          let upcomingConfirmed = 0, upcomingPending = 0;
+          for (const r of rows) {
+            if (lessonPast(now, r)) continue;
+            if (r.status === 'confirmed') upcomingConfirmed += r.price;
+            else if (r.status === 'pending') upcomingPending += r.price;
+          }
+          const util = {};
+          for (const type of ['manual', 'automatic']) {
+            const template = await templateFor(env, type);
+            const blocked = await blockedDates(env, now.date, horizon, type);
+            let avail = 0;
+            for (let d = now.date; d <= horizon; d = addDays(d, 1)) {
+              if (blocked.has(d)) continue;
+              const day = template[isoDayKey(d)];
+              if (day) avail += toMin(day.end) - toMin(day.start);
+            }
+            const booked = rows
+              .filter(r => (r.lesson_type === 'automatic') === (type === 'automatic'))
+              .filter(r => r.date >= now.date && r.date <= horizon)
+              .reduce((a, r) => a + r.duration_min, 0);
+            util[type] = { avail_min: avail, booked_min: booked };
+          }
+          return json({ upcoming_confirmed: upcomingConfirmed,
+            upcoming_pending: upcomingPending, window_days: 28, utilisation: util });
+        }
+
+        // Pupil analytics: growth, depth, and who has gone quiet
+        if (path === '/dev/pupils' && req.method === 'GET') {
+          const now = ukNowParts();
+          const rows = (await env.DB.prepare(
+            'SELECT * FROM bookings ORDER BY date, time').all()).results;
+          const metas = new Map((await env.DB.prepare('SELECT * FROM students').all())
+            .results.map(m => [m.email, m]));
+          const pupils = new Map();
+          for (const r of rows) {
+            const p = pupils.get(r.email) || { email: r.email, name: r.name, phone: r.phone,
+              first_date: r.date, last_past: null, past: 0, future: 0 };
+            p.name = r.name; p.phone = r.phone;
+            if (r.date < p.first_date) p.first_date = r.date;
+            if (r.status !== 'cancelled') {
+              if (lessonPast(now, r)) { p.past++; if (!p.last_past || r.date > p.last_past) p.last_past = r.date; }
+              else p.future++;
+            }
+            pupils.set(r.email, p);
+          }
+          const monthCounts = new Map();
+          let taught = 0, lessonsTaught = 0;
+          const quiet = [];
+          const cutoff = addDays(now.date, -30);
+          for (const p of pupils.values()) {
+            const m = p.first_date.slice(0, 7);
+            monthCounts.set(m, (monthCounts.get(m) || 0) + 1);
+            if (p.past > 0) { taught++; lessonsTaught += p.past; }
+            const meta = metas.get(p.email) || {};
+            if (p.past > 0 && p.future === 0 && p.last_past <= cutoff && !meta.passed && !meta.archived)
+              quiet.push({ name: p.name, phone: p.phone, email: p.email,
+                last_lesson: p.last_past, lessons: p.past });
+          }
+          quiet.sort((a, b) => b.last_lesson.localeCompare(a.last_lesson));
+          return json({
+            total_pupils: pupils.size,
+            avg_lessons: taught ? Math.round(lessonsTaught / taught * 10) / 10 : 0,
+            new_by_month: [...monthCounts.entries()].map(([month, count]) => ({ month, count }))
+              .sort((a, b) => a.month.localeCompare(b.month)).slice(-8),
+            quiet,
+          });
+        }
+
+        // Ops snapshot: table sizes, gallery usage, live config
+        if (path === '/dev/ops' && req.method === 'GET') {
+          const counts = {};
+          for (const t of ['bookings', 'students', 'users', 'sessions', 'admins', 'charges',
+            'package_requests', 'overrides', 'gallery', 'security_log', 'error_log', 'audit_log']) {
+            counts[t] = (await env.DB.prepare(`SELECT COUNT(*) AS c FROM ${t}`).first())?.c || 0;
+          }
+          return json({ counts, gallery_cap: 60,
+            config: await getSetting(env, 'config', DEFAULT_CONFIG) });
+        }
+
         if (path === '/dev/errors' && req.method === 'GET') {
           const dayAgo = Math.floor(Date.now() / 1000) - 86400;
           return json({
@@ -1096,13 +1230,10 @@ export default {
 
       // ---- admin ----
       if (path.startsWith('/admin/')) {
-        if (!(await isAdmin(req, env))) {
-          // the owner's DEV_KEY unlocks the admin API too (the developer
-          // console reads everything the instructor console can)
-          if (!(await isDev(req, env))) {
-            secLog(env, ctx, 'admin_auth_fail', path);
-            return json({ error: 'unauthorized' }, 401);
-          }
+        const actor = await adminActor(req, env);
+        if (!actor) {
+          secLog(env, ctx, 'admin_auth_fail', path);
+          return json({ error: 'unauthorized' }, 401);
         }
 
         // Console KPIs: booked/collected money + outstanding + pending count.
@@ -1218,6 +1349,8 @@ export default {
             ).bind(ref, series, d, time, duration, price, abType, abMotorway, abMock, name, email, phone, postcode, house, notes, status, nowSec).run();
             booked.push({ date: d, ref });
           }
+          audit(env, ctx, actor, 'add-booking',
+            `${name} — ${booked.map(x => x.date).join(', ')} ${time} (£${price} each, ${abType})`);
           return json({ ok: true, booked, skipped, price_each: price, email });
         }
 
@@ -1276,10 +1409,14 @@ export default {
               ).bind(id).run();
             }
             await notifyCancelledPupils(env, ctx, rows, url.origin);
+            audit(env, ctx, actor, 'cancel-booking',
+              rows.map(r => `${r.name} ${r.date} ${r.time}`).join('; ') || `ids ${ids.join(',')}`);
           } else {
             for (const id of ids) await env.DB.prepare(
               'UPDATE bookings SET status = ?, cancelled_by = NULL, fee = 0 WHERE id = ?'
             ).bind(b.action, id).run();
+            audit(env, ctx, actor, b.action === 'confirmed' ? 'confirm-booking' : 'set-pending',
+              `ids ${ids.join(',')}`);
           }
           return json({ ok: true });
         }
@@ -1288,6 +1425,7 @@ export default {
           const b = await readBody(req);
           if (!b || !Number.isInteger(b.id) || ![0, 1].includes(b.paid)) return json({ error: 'bad request' }, 400);
           await env.DB.prepare('UPDATE bookings SET paid = ? WHERE id = ?').bind(b.paid, b.id).run();
+          audit(env, ctx, actor, b.paid ? 'mark-paid' : 'mark-unpaid', `booking #${b.id}`);
           return json({ ok: true });
         }
 
@@ -1416,6 +1554,7 @@ export default {
           }
           await env.DB.prepare('UPDATE package_requests SET status = ? WHERE id = ?')
             .bind(b.action === 'accept' ? 'accepted' : 'declined', b.id).run();
+          audit(env, ctx, actor, `package-${b.action}`, `${row.package} — ${row.name}`);
           return json({ ok: true });
         }
 
@@ -1423,6 +1562,7 @@ export default {
           const b = await readBody(req);
           if (!b || !Number.isInteger(b.id) || ![0, 1].includes(b.paid)) return json({ error: 'bad request' }, 400);
           await env.DB.prepare('UPDATE charges SET paid = ? WHERE id = ?').bind(b.paid, b.id).run();
+          audit(env, ctx, actor, b.paid ? 'charge-paid' : 'charge-unpaid', `charge #${b.id}`);
           return json({ ok: true });
         }
 
@@ -1447,6 +1587,8 @@ export default {
           }
           await putStudentMeta(env, { ...m, email: row.email });
           await env.DB.prepare('UPDATE bookings SET paid = 1 WHERE id = ?').bind(b.id).run();
+          audit(env, ctx, actor, 'cover-from-credit',
+            `${row.email} — ${row.date} ${row.time} (${b.unit === 'mock' ? '1 mock test' : row.duration_min + ' min'})`);
           return json({ ok: true, credit_min: m.credit_min || 0, credit_mock: m.credit_mock || 0 });
         }
 
@@ -1464,6 +1606,7 @@ export default {
           meta.archived = b.archived ? 1 : 0;
           await putStudentMeta(env, { ...meta, email });
           if (b.archived) await env.DB.prepare('DELETE FROM sessions WHERE email = ?').bind(email).run();
+          audit(env, ctx, actor, b.archived ? 'archive-pupil' : 'restore-pupil', email);
           return json({ ok: true, archived: !!meta.archived });
         }
 
@@ -1475,6 +1618,7 @@ export default {
           if (typeof b.notes === 'string') m.notes = b.notes.slice(0, 2000);
           if (typeof b.passed === 'boolean') m.passed = b.passed ? 1 : 0;
           await putStudentMeta(env, { ...m, email });
+          audit(env, ctx, actor, 'edit-pupil-record', email);
           return json({ ok: true, meta: { notes: m.notes || '', passed: !!m.passed, credit: m.credit || 0 } });
         }
 
@@ -1539,6 +1683,7 @@ export default {
             clean[k] = { start: d.start, end: d.end };
           }
           await putSetting(env, tplType === 'automatic' ? 'template_auto' : 'template', clean);
+          audit(env, ctx, actor, 'edit-hours', tplType);
           return json({ ok: true });
         }
 
@@ -1548,6 +1693,7 @@ export default {
           if (b.remove) {
             if (!Number.isInteger(b.id)) return json({ error: 'bad request' }, 400);
             await env.DB.prepare('DELETE FROM overrides WHERE id = ?').bind(b.id).run();
+            audit(env, ctx, actor, 'reopen-time-off', `override #${b.id}`);
             return json({ ok: true });
           }
           const start = b.start_date, end = b.end_date || b.start_date;
@@ -1574,6 +1720,8 @@ export default {
               hit.map(h => `${h.date} ${h.time} ${h.name} (${h.phone})`).join('\n'));
             await notifyCancelledPupils(env, ctx, hit, url.origin);
           }
+          audit(env, ctx, actor, 'block-time-off',
+            `${start} → ${end} (${ovType || 'both'}, ${hit.length} lesson(s) auto-cancelled)`);
           return json({ ok: true, cancelled: hit });
         }
 
@@ -1592,6 +1740,7 @@ export default {
           await env.DB.prepare(
             'INSERT INTO gallery (caption, mime, data, created_at) VALUES (?, ?, ?, ?)'
           ).bind(String(b.caption || '').slice(0, 200), mime, data, Math.floor(Date.now() / 1000)).run();
+          audit(env, ctx, actor, 'gallery-upload', String(b.caption || '').slice(0, 80));
           return json({ ok: true });
         }
 
@@ -1599,6 +1748,7 @@ export default {
           const b = await readBody(req);
           if (!b || !Number.isInteger(b.id)) return json({ error: 'bad request' }, 400);
           await env.DB.prepare('DELETE FROM gallery WHERE id = ?').bind(b.id).run();
+          audit(env, ctx, actor, 'gallery-delete', `photo #${b.id}`);
           return json({ ok: true });
         }
 
@@ -1636,6 +1786,7 @@ export default {
             instructor_auto: String(c.instructor_auto || DEFAULT_CONFIG.instructor_auto).slice(0, 40),
           };
           await putSetting(env, 'config', clean);
+          audit(env, ctx, actor, 'edit-settings', '');
           return json({ ok: true });
         }
       }

@@ -100,6 +100,29 @@
         <h2>Package requests</h2>
         <div id="pkgList" class="muted">—</div>
       </div>
+      <div class="card">
+        <h2>Pupil analytics</h2>
+        <div class="kpis" id="pupilKpis" style="margin-bottom:10px"></div>
+        <p class="muted">New pupils by month (month of their first booking):</p>
+        <div id="pupilChart"></div>
+        <h2 style="margin-top:14px">Gone quiet — worth a text</h2>
+        <p class="muted">Pupils with lesson history, nothing booked, and no lesson in 30+ days
+          (passed and archived pupils excluded).</p>
+        <div class="scroll"><table id="quietTable">
+          <thead><tr><th>Name</th><th>Phone</th><th>Last lesson</th><th class="num">Lessons taken</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <h2>Traffic (last 30 days)</h2>
+        <p class="muted">Anonymous homepage views per day — no cookies, no IPs; bots included.
+          Bookings = booking requests made that day.</p>
+        <div id="trafficChart"></div>
+        <div class="scroll"><table id="trafficTable">
+          <thead><tr><th>Day</th><th class="num">Views</th><th class="num">Bookings</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
     </div>
 
     <!-- ============ SECURITY ============ -->
@@ -114,6 +137,18 @@
         </table></div>
       </div>
       <div class="card">
+        <h2>Admin actions (audit trail)</h2>
+        <p class="muted">Every change made in the instructor console, and who made it.</p>
+        <div class="scroll"><table id="audTable">
+          <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Detail</th></tr></thead><tbody></tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <h2>Ops</h2>
+        <div class="kpis" id="opsKpis" style="margin-bottom:10px"></div>
+        <p class="muted" id="opsConfig"></p>
+      </div>
+      <div class="card">
         <h2>Worker errors</h2>
         <div class="kpis" id="errKpis" style="margin-bottom:10px"></div>
         <div class="scroll"><table id="errTable">
@@ -125,7 +160,12 @@
     <!-- ============ EARNINGS & ACCOUNTS ============ -->
     <div class="pane" id="pane-earnings">
       <div class="card">
+        <h2>Pipeline &amp; utilisation (next 4 weeks)</h2>
+        <div class="kpis" id="pipeKpis"></div>
+      </div>
+      <div class="card">
         <h2>Monthly earnings</h2>
+        <div id="earnChart" style="margin-bottom:10px"></div>
         <p class="muted">Computed live from the full booking + charge history. Collected = paid lessons,
           late fees and package charges in that month; booked = all non-cancelled lesson value.</p>
         <div class="scroll"><table id="earnTable">
@@ -195,6 +235,26 @@ $('loginForm').addEventListener('submit', async e => {
   }
 });
 
+// tiny dependency-free bar chart; series = [{get, color}] stacked per item
+function bars(items, series, label) {
+  if (!items.length) return '<p class="muted">No data yet.</p>';
+  const max = Math.max(1, ...items.map(it => series.reduce((a, s) => a + s.get(it), 0)));
+  const bw = 16, gap = 4, H = 120;
+  let x = 0, out = '';
+  for (const it of items) {
+    let y = H;
+    for (const s of series) {
+      const h = Math.round(s.get(it) / max * (H - 24));
+      y -= h;
+      out += `<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="2" fill="${s.color}">` +
+        `<title>${esc(label(it))}</title></rect>`;
+    }
+    x += bw + gap;
+  }
+  return `<svg viewBox="0 0 ${Math.max(200, x)} ${H}" preserveAspectRatio="xMinYMax meet"` +
+    ` style="width:100%; max-height:130px">${out}</svg>`;
+}
+
 const kpi = (v, l, cls = '') =>
   `<div class="kpi ${cls}"><div class="v">${v}</div><div class="l">${esc(l)}</div></div>`;
 
@@ -202,10 +262,13 @@ async function enter() {
   $('login').style.display = 'none';
   $('console').style.display = 'block';
 
-  const [earn, sec, errs, summary, students, bookings, pkgs] = await Promise.all([
+  const [earn, sec, errs, summary, students, bookings, pkgs,
+    aud, traffic, pipe, pup, ops] = await Promise.all([
     api('/dev/earnings'), api('/dev/security'), api('/dev/errors'),
     api('/admin/summary'), api('/admin/students?view=active'),
     api('/admin/bookings'), api('/admin/packages'),
+    api('/dev/audit'), api('/dev/traffic'), api('/dev/pipeline'),
+    api('/dev/pupils'), api('/dev/ops'),
   ]);
 
   // --- site details ---
@@ -264,12 +327,67 @@ async function enter() {
       ? '<b style="color:var(--bad)">canary_login</b>' : esc(r.kind)}</td><td>${esc(r.detail)}</td></tr>`).join('')
     || '<tr><td colspan="3" class="muted">No events yet.</td></tr>';
 
+  $('audTable').tBodies[0].innerHTML = aud.audit.map(a =>
+    `<tr><td>${when(a.at)}</td><td>${esc(a.actor)}</td><td>${esc(a.action)}</td>` +
+    `<td style="white-space:normal">${esc(a.detail)}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">No console actions recorded yet.</td></tr>';
+
+  $('opsKpis').innerHTML =
+    kpi(ops.counts.bookings, 'Bookings') + kpi(ops.counts.students, 'Student records') +
+    kpi(ops.counts.users, 'Pupil logins') + kpi(ops.counts.admins, 'Instructor accounts') +
+    kpi(`${ops.counts.gallery}/${ops.gallery_cap}`, 'Gallery photos',
+      ops.counts.gallery >= ops.gallery_cap * 0.9 ? 'warn' : '') +
+    kpi(ops.counts.audit_log, 'Audit rows') + kpi(ops.counts.security_log, 'Security rows') +
+    kpi(ops.counts.error_log, 'Error rows');
+  const c = ops.config;
+  $('opsConfig').textContent = `Live config: £${c.hourly_rate}/h manual · £${c.hourly_rate_auto}/h ` +
+    `automatic · book notice ${c.notice_hours}h · cancel notice ${c.cancel_notice_hours}h · ` +
+    `late fee £${c.late_cancel_fee} · horizon ${c.horizon_days}d · lessons ` +
+    `${c.min_duration}–${c.max_duration} min · packages £${c.pkg_beginner_price ?? 190}/£${c.pkg_mock_price ?? 95}`;
+
   $('errKpis').innerHTML = kpi(errs.count_24h, 'Errors (24h)', errs.count_24h > 0 ? 'bad' : '');
   $('errTable').tBodies[0].innerHTML = errs.recent.map(r =>
     `<tr><td>${when(r.at)}</td><td>${esc(r.route)}</td><td>${esc(r.detail)}</td></tr>`).join('')
     || '<tr><td colspan="3" class="muted">No errors logged.</td></tr>';
 
   // --- earnings & accounts ---
+  const um = pipe.utilisation.manual, ua = pipe.utilisation.automatic;
+  const pct = u => u.avail_min ? Math.round(u.booked_min / u.avail_min * 100) + '%' : '—';
+  $('pipeKpis').innerHTML =
+    kpi(money(pipe.upcoming_confirmed), 'Confirmed future lessons') +
+    kpi(money(pipe.upcoming_pending), 'Pending requests value', pipe.upcoming_pending > 0 ? 'warn' : '') +
+    kpi(pct(um), 'Manual diary full', um.avail_min && um.booked_min / um.avail_min > .8 ? 'good' : '') +
+    kpi(pct(ua), 'Automatic diary full', ua.avail_min && ua.booked_min / ua.avail_min > .8 ? 'good' : '');
+
+  const em = [...earn.months].reverse();
+  $('earnChart').innerHTML = bars(em, [
+    { get: m => m.collected_manual, color: 'var(--accent)' },
+    { get: m => m.collected_automatic, color: 'var(--warn)' },
+  ], m => `${m.month}: ${money(m.collected)} (manual ${money(m.collected_manual)}, automatic ${money(m.collected_automatic)})`) +
+    '<p class="muted">Collected per month — <span style="color:var(--accent)">■</span> manual · ' +
+    '<span style="color:var(--warn)">■</span> automatic. Hover a bar for the numbers.</p>';
+
+  // --- pupil analytics + traffic ---
+  const nm = pup.new_by_month;
+  $('pupilKpis').innerHTML =
+    kpi(pup.total_pupils, 'Pupils ever') +
+    kpi(nm.length ? nm[nm.length - 1].count : 0, 'New this month') +
+    kpi(pup.avg_lessons, 'Avg lessons per pupil') +
+    kpi(pup.quiet.length, 'Gone quiet', pup.quiet.length ? 'warn' : '');
+  $('pupilChart').innerHTML = bars(nm, [{ get: m => m.count, color: 'var(--accent)' }],
+    m => `${m.month}: ${m.count} new pupil(s)`);
+  $('quietTable').tBodies[0].innerHTML = pup.quiet.map(q =>
+    `<tr><td>${esc(q.name)}</td><td>${esc(q.phone)}</td><td>${q.last_lesson}</td>` +
+    `<td class="num">${q.lessons}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">Nobody has gone quiet — good sign.</td></tr>';
+
+  const tdays = [...traffic.days].reverse();
+  $('trafficChart').innerHTML = bars(tdays, [{ get: d => d.views, color: 'var(--accent)' }],
+    d => `${d.day}: ${d.views} views, ${d.bookings} booking(s)`);
+  $('trafficTable').tBodies[0].innerHTML = traffic.days.slice(0, 14).map(d =>
+    `<tr><td>${d.day}</td><td class="num">${d.views}</td><td class="num">${d.bookings}</td></tr>`).join('')
+    || '<tr><td colspan="3" class="muted">Counting starts today — check back tomorrow.</td></tr>';
+
   const tb = $('earnTable').tBodies[0];
   tb.innerHTML = '';
   const tot = { lessons: 0, booked: 0, collected: 0, collected_manual: 0,
