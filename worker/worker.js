@@ -586,9 +586,10 @@ const publicLesson = b => ({
 export default {
   async fetch(req, env, ctx) {
     {
-      // Canonical host: www duplicates the site, so 301 it to the apex (SEO)
+      // Canonical host: www and the retired workers.dev URL both 301 to the
+      // apex (the #fragment survives a redirect client-side)
       const u = new URL(req.url);
-      if (u.hostname === 'www.ridewaepride.com')
+      if (u.hostname === 'www.ridewaepride.com' || u.hostname.endsWith('.workers.dev'))
         return Response.redirect('https://ridewaepride.com' + u.pathname + u.search, 301);
       // "/" is routed through the Worker (run_worker_first) for the redirect
       // above — count the page view (anonymous: one number per UK day, no
@@ -1791,6 +1792,10 @@ export default {
         }
       }
 
+      // Anything that isn't an API route is a static asset (all requests run
+      // through the Worker now so host redirects work on every path)
+      if (env.ASSETS && (req.method === 'GET' || req.method === 'HEAD'))
+        return env.ASSETS.fetch(req);
       return json({ error: 'not found' }, 404);
     } catch (e) {
       errLog(env, ctx, path, String(e && e.message || e));

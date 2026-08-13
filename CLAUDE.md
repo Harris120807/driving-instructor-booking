@@ -59,8 +59,13 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
   (domain bought by the instructor at GoDaddy, nameservers moved); apex +
   www attached as Workers custom domains via the account-level
   workers/domains API (the deploy token can do this; it canNOT edit zone
-  DNS). The workers.dev URL (driving-booking.harris-stockdash.workers.dev)
-  still works as a fallback. D1 `driving-booking`
+  DNS). The workers.dev URL was RETIRED 2026-08-13
+  (owner request): every request on *.workers.dev (and www) 301s to the
+  apex — `run_worker_first = true` routes ALL paths through the Worker,
+  with a final `env.ASSETS.fetch` fallback serving the static pages, so
+  the host redirect covers deep links too. workers.dev is therefore no
+  longer a fallback if the custom domain detaches — remove the redirect
+  to restore it. D1 `driving-booking`
   id d6afe460-f234-4c9f-b168-a2ecfa18962a. Schema migrations = re-run
   schema.sql (CREATE TABLE IF NOT EXISTS only; never destructive on prod).
   Deploys via wrangler with an owner-pasted scoped token (Workers+D1 edit).
