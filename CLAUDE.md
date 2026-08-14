@@ -59,13 +59,17 @@ reuse ValueTally's ntfy topics, Worker, or secrets here.
   (domain bought by the instructor at GoDaddy, nameservers moved); apex +
   www attached as Workers custom domains via the account-level
   workers/domains API (the deploy token can do this; it canNOT edit zone
-  DNS). The workers.dev URL was RETIRED 2026-08-13
-  (owner request): every request on *.workers.dev (and www) 301s to the
-  apex — `run_worker_first = true` routes ALL paths through the Worker,
-  with a final `env.ASSETS.fetch` fallback serving the static pages, so
-  the host redirect covers deep links too. workers.dev is therefore no
-  longer a fallback if the custom domain detaches — remove the redirect
-  to restore it. D1 `driving-booking`
+  DNS). The workers.dev URL was retired 2026-08-13 then
+  **RESTORED the same day**: on 2026-08-13 the INSTRUCTOR repointed the
+  domain's nameservers from Cloudflare to GoDaddy (ns15/ns16.domaincontrol)
+  without consulting the owner, publishing a GoDaddy "Airo" AI site and
+  taking ridewaepride.com away from this Worker (and killing the domain's
+  MX, so contact@ mail stopped). The workers.dev URL is therefore the
+  owner's ONLY domain-independent route to the console, developer dash and
+  D1 data — do NOT redirect it again. `run_worker_first = true` still routes
+  all paths through the Worker (final `env.ASSETS.fetch` fallback serves the
+  static pages); only www 301s to the apex. Restoring the site = the
+  instructor setting nameservers back to jobs/marjory.ns.cloudflare.com. D1 `driving-booking`
   id d6afe460-f234-4c9f-b168-a2ecfa18962a. Schema migrations = re-run
   schema.sql (CREATE TABLE IF NOT EXISTS only; never destructive on prod).
   Deploys via wrangler with an owner-pasted scoped token (Workers+D1 edit).

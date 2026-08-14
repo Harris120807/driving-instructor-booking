@@ -586,10 +586,13 @@ const publicLesson = b => ({
 export default {
   async fetch(req, env, ctx) {
     {
-      // Canonical host: www and the retired workers.dev URL both 301 to the
-      // apex (the #fragment survives a redirect client-side)
+      // Canonical host: www 301s to the apex (SEO). The workers.dev URL is
+      // deliberately NOT redirected (restored 2026-08-13): it is the owner's
+      // direct route to the console, developer dash and database that does
+      // not depend on the domain's nameservers, which the instructor
+      // controls at their registrar.
       const u = new URL(req.url);
-      if (u.hostname === 'www.ridewaepride.com' || u.hostname.endsWith('.workers.dev'))
+      if (u.hostname === 'www.ridewaepride.com')
         return Response.redirect('https://ridewaepride.com' + u.pathname + u.search, 301);
       // "/" is routed through the Worker (run_worker_first) for the redirect
       // above — count the page view (anonymous: one number per UK day, no
